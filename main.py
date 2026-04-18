@@ -1,19 +1,26 @@
 """astrbot_plugin_sekai_card - Project Sekai 卡牌信息 & 剧情导出插件。
 
 指令：
-    /sekai_card <card_id> [translate]
+    /skcd card <card_id> [translate]
+    /skcd event <event_id> [character] [translate]
+
+    旧的 /sekai_card 作为 alias 保留，也可写作
+    /sekai_card card 1275 或 /sekai_card event 202 miku。
 
 功能：
     1. 拉取指定卡牌的基础信息并作为文本消息发送。
     2. 拉取该卡牌的前篇/后篇剧情脚本，渲染为纯文本并作为 txt 文件发送。
-    3. （可选）当 translate 参数为真（true/yes/1）时，调用 LLM 翻译卡面名称
-       和剧情正文，并额外输出译文版本。
+    3. 对于活动 (event) 指令，列出活动信息并可选择某位角色的活动卡牌，
+       输出其卡面信息与剧情。
+    4. （可选）当 translate 参数为真（true/yes/1）时，调用 AstrBot 当前
+       LLM 提供商翻译卡名和剧情，额外输出中文版本。
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -22,6 +29,7 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
+from .sekai.characters import resolve_character_id
 from .sekai.client import SekaiClient
 from .sekai.formatter import format_card_info, format_scenario
 
@@ -51,12 +59,14 @@ _SYS_PROMPT_SCENARIO = (
 # 文件名安全字符：字母数字下划线、CJK 统一表意、平假名、片假名
 _FILENAME_SAFE_RE = re.compile(r"[^\w\-\u3040-\u30ff\u4e00-\u9fff]+", re.UNICODE)
 
+_JST = timezone(timedelta(hours=9))
+
 
 @register(
     "astrbot_plugin_sekai_card",
     "Cinea4678",
-    "从 sekai.best 拉取 Project Sekai 卡牌信息与角色剧情并输出文本。",
-    "0.2.0",
+    "从 sekai.best 拉取 Project Sekai 卡牌 / 活动信息与角色剧情并输出文本。",
+    "0.3.0",
     "https://github.com/Cinea4678/astrbot_plugin_sekai_card",
 )
 class SekaiCardPlugin(Star):
@@ -71,31 +81,127 @@ class SekaiCardPlugin(Star):
         self._data_dir.mkdir(parents=True, exist_ok=True)
 
     # -----------------------------
-    # 指令入口
+    # 指令组：/skcd（别名 /sekai_card）
     # -----------------------------
-    @filter.command("sekai_card")
-    async def cmd_sekai_card(
+    @filter.command_group("skcd", alias={"sekai_card"})
+    def skcd(self):
+        """Sekai 卡牌 / 活动指令组。
+
+        子指令：
+          card  <卡牌ID> [translate]
+          event <活动ID> [角色昵称] [translate]
+        """
+
+    # -----------------------------
+    # 子指令：/skcd card
+    # -----------------------------
+    @skcd.command("card")
+    async def cmd_card(
         self,
         event: AstrMessageEvent,
         card_id: int | None = None,
         translate: bool = False,
     ):
-        """拉取卡牌信息与剧情。
+        """/skcd card <卡牌ID> [translate]
 
-        用法：/sekai_card <卡牌ID> [translate]
-        translate 传 true/yes/1 时，会调用 LLM 额外输出中文译名与译文 txt。
+        拉取卡牌信息与前/后篇剧情。translate 传 true/yes/1 时，会额外输出中文译名与译文。
         """
-
         if card_id is None:
             yield event.plain_result(
-                "用法：/sekai_card <卡牌ID> [translate]，例如 /sekai_card 1275 true"
+                "用法：/skcd card <卡牌ID> [translate]，例如 /skcd card 1275 true"
             )
             return
 
+        async for msg in self._handle_card(event, card_id, translate):
+            yield msg
+
+    # -----------------------------
+    # 子指令：/skcd event
+    # -----------------------------
+    @skcd.command("event")
+    async def cmd_event(
+        self,
+        event: AstrMessageEvent,
+        event_id: int | None = None,
+        character: str | None = None,
+        translate: bool = False,
+    ):
+        """/skcd event <活动ID> [角色昵称] [translate]
+
+        不带角色时输出活动信息与卡牌列表；带角色时输出该活动中该角色的卡面 & 剧情。
+        支持昵称如 miku / saki / toya / 冬弥 等，详见 README。
+        """
+        if event_id is None:
+            yield event.plain_result(
+                "用法：/skcd event <活动ID> [角色昵称] [translate]，例如 /skcd event 202 miku"
+            )
+            return
+
+        yield event.plain_result(f"正在拉取活动 {event_id} 的信息……")
+
+        try:
+            events, event_cards = await self._client.fetch_event_data()
+            cards, episodes, characters = await self._client.fetch_master_data()
+        except Exception as e:  # noqa: BLE001
+            logger.exception("[sekai_card] 拉取主数据失败")
+            yield event.plain_result(f"拉取 sekai 主数据失败：{e}")
+            return
+
+        ev = _find_by_id(events, event_id)
+        if not ev:
+            yield event.plain_result(f"没有找到 ID 为 {event_id} 的活动。")
+            return
+
+        related = [ec for ec in event_cards if ec.get("eventId") == event_id]
+        event_card_ids = [ec.get("cardId") for ec in related]
+        ev_cards = [c for c in cards if c.get("id") in event_card_ids]
+
+        # 没指定角色：输出活动概览 + 卡牌列表
+        if not character:
+            yield event.plain_result(
+                _format_event_summary(ev, ev_cards, characters)
+            )
+            return
+
+        # 指定了角色：解析昵称（character 可能因纯数字被自动转成 int）
+        char_id = resolve_character_id(str(character))
+        if char_id is None:
+            yield event.plain_result(
+                f"没认出角色『{character}』。"
+                "请用昵称如 miku / saki / toya / kanade 或角色名（中日均可）。"
+            )
+            return
+
+        matched = [c for c in ev_cards if c.get("characterId") == char_id]
+        if not matched:
+            char = _find_by_id(characters, char_id)
+            name = _character_display_name(char) if char else f"ID {char_id}"
+            yield event.plain_result(f"活动 {event_id} 里没有『{name}』的卡牌。")
+            return
+
+        for card in matched:
+            c_id = int(card["id"])
+            async for msg in self._handle_card_with_prefetched(
+                event, c_id, translate, cards, episodes, characters
+            ):
+                yield msg
+
+    async def terminate(self) -> None:
+        """插件卸载时无需特殊清理。"""
+
+    # -----------------------------
+    # 单张卡牌处理
+    # -----------------------------
+    async def _handle_card(
+        self,
+        event: AstrMessageEvent,
+        card_id: int,
+        translate: bool,
+    ):
         try:
             card_id = int(card_id)
         except (TypeError, ValueError):
-            yield event.plain_result("卡牌ID必须是整数。例如 /sekai_card 1275")
+            yield event.plain_result("卡牌ID必须是整数。例如 /skcd card 1275")
             return
 
         yield event.plain_result(f"正在拉取卡牌 {card_id} 的信息与剧情……")
@@ -107,6 +213,20 @@ class SekaiCardPlugin(Star):
             yield event.plain_result(f"拉取 sekai 主数据失败：{e}")
             return
 
+        async for msg in self._handle_card_with_prefetched(
+            event, card_id, translate, cards, episodes, characters
+        ):
+            yield msg
+
+    async def _handle_card_with_prefetched(
+        self,
+        event: AstrMessageEvent,
+        card_id: int,
+        translate: bool,
+        cards: list[dict],
+        episodes: list[dict],
+        characters: list[dict],
+    ):
         card = _find_by_id(cards, card_id)
         if not card:
             yield event.plain_result(f"没有找到 ID 为 {card_id} 的卡牌。")
@@ -114,11 +234,9 @@ class SekaiCardPlugin(Star):
 
         character = _find_by_id(characters, card.get("characterId"))
 
-        # -------- 卡面信息 --------
         async for msg in self._emit_card_info(event, card, character, translate):
             yield msg
 
-        # -------- 剧情 --------
         card_episodes = sorted(
             (ep for ep in episodes if ep.get("cardId") == card_id),
             key=lambda ep: ep.get("seq", 0),
@@ -133,9 +251,6 @@ class SekaiCardPlugin(Star):
                 event, card_id, assetbundle_name, ep, translate
             ):
                 yield msg
-
-    async def terminate(self) -> None:
-        """插件卸载时无需特殊清理。"""
 
     # -----------------------------
     # 输出流水：卡面信息
@@ -287,6 +402,49 @@ def _find_by_id(items: Iterable[dict], target_id) -> dict | None:
     if target_id is None:
         return None
     return next((item for item in items if item.get("id") == target_id), None)
+
+
+def _character_display_name(character: dict | None) -> str:
+    if not character:
+        return "?"
+    parts = [character.get("firstName", ""), character.get("givenName", "")]
+    return " ".join(p for p in parts if p) or "?"
+
+
+def _fmt_event_time(ts_ms: int | None) -> str:
+    if not ts_ms:
+        return "未知"
+    try:
+        dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).astimezone(_JST)
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, OSError):
+        return "未知"
+
+
+def _format_event_summary(
+    ev: dict, ev_cards: list[dict], characters: list[dict]
+) -> str:
+    lines = [
+        f"🎉 活动 #{ev.get('id')}　{ev.get('name') or '-'}",
+        f"类型：{ev.get('eventType') or '-'}",
+        f"开始：{_fmt_event_time(ev.get('startAt'))} (JST)",
+        f"结束：{_fmt_event_time(ev.get('closedAt'))} (JST)",
+    ]
+    if not ev_cards:
+        lines.append("\n（该活动暂无活动卡牌数据）")
+        return "\n".join(lines)
+
+    lines.append(f"\n活动卡牌（{len(ev_cards)} 张）：")
+    for c in sorted(ev_cards, key=lambda x: x.get("id", 0)):
+        char = _find_by_id(characters, c.get("characterId"))
+        name = _character_display_name(char)
+        lines.append(
+            f"  • [{c.get('id')}] {name}　{c.get('prefix') or '-'}"
+        )
+    lines.append(
+        "\n使用 `/skcd event <活动ID> <角色昵称>` 可进一步拉取该角色的卡面与剧情。"
+    )
+    return "\n".join(lines)
 
 
 def _split_by_lines(text: str, max_chars: int) -> Iterable[str]:

@@ -10,7 +10,13 @@
 2. 该卡牌前篇、后篇角色剧情的纯文本 `.txt` 附件。
 3. 可选：指令携带 `translate` 参数（值为 true/yes/1）时，调用 AstrBot 当前 LLM 提供商翻译卡名和剧情，额外输出中文版本。
 
-**入口指令**：`/sekai_card <卡牌ID> [translate]`（例：`/sekai_card 1275`、`/sekai_card 1275 true`）。`translate` 参数接受 `true/false/yes/no/1/0`，省略则为 `false`。
+**入口指令**（指令组 `/skcd`，旧名 `/sekai_card` 作为 alias）：
+
+- `/skcd card <卡牌ID> [translate]`（例：`/skcd card 1275`、`/skcd card 1275 true`）。
+- `/skcd event <活动ID> [角色昵称] [translate]`（例：`/skcd event 202`、`/skcd event 202 miku`）。
+- `/sekai_card card ...` / `/sekai_card event ...`：完全等价的别名写法。
+
+`translate` 参数接受 `true/false/yes/no/1/0`，省略则为 `false`。
 
 ## 数据来源（非常重要）
 
@@ -40,7 +46,7 @@
 
 ```
 astrbot_plugin_sekai_card/
-├── main.py                 # 插件入口：SekaiCardPlugin，注册 /sekai_card 指令
+├── main.py                 # 插件入口：SekaiCardPlugin，注册 /card /event /sekai_card 指令
 ├── metadata.yaml           # 插件元数据，AstrBot 识别插件的依据
 ├── _conf_schema.json       # WebUI 配置项 Schema
 ├── requirements.txt        # httpx
@@ -48,7 +54,8 @@ astrbot_plugin_sekai_card/
 ├── AGENTS.md               # 本文件，面向开发者/Agent
 └── sekai/
     ├── __init__.py
-    ├── client.py           # SekaiClient：异步 + 内存 TTL 缓存的数据源客户端
+    ├── characters.py        # 昵称 -> characterId 映射表，纯函数
+    ├── client.py            # SekaiClient：异步 + 内存 TTL 缓存的数据源客户端
     └── formatter.py        # format_card_info / format_scenario：纯函数，无副作用
 ```
 

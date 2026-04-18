@@ -6,6 +6,8 @@
 - 卡牌主表:     https://sekai-world.github.io/sekai-master-db-diff/cards.json
 - 卡牌剧情表:   https://sekai-world.github.io/sekai-master-db-diff/cardEpisodes.json
 - 角色表:       https://sekai-world.github.io/sekai-master-db-diff/gameCharacters.json
+- 活动主表:     https://sekai-world.github.io/sekai-master-db-diff/events.json
+- 活动卡牌关系: https://sekai-world.github.io/sekai-master-db-diff/eventCards.json
 - 剧情脚本:     https://storage.sekai.best/sekai-jp-assets/character/member/
                     {assetbundleName}/{scenarioId}.asset
 """
@@ -24,6 +26,8 @@ STORAGE_BASE = "https://storage.sekai.best/sekai-jp-assets"
 CARDS_URL = f"{MASTER_DB_BASE}/cards.json"
 CARD_EPISODES_URL = f"{MASTER_DB_BASE}/cardEpisodes.json"
 GAME_CHARACTERS_URL = f"{MASTER_DB_BASE}/gameCharacters.json"
+EVENTS_URL = f"{MASTER_DB_BASE}/events.json"
+EVENT_CARDS_URL = f"{MASTER_DB_BASE}/eventCards.json"
 
 
 class SekaiClient:
@@ -58,6 +62,14 @@ class SekaiClient:
                 self._get_json(client, CARDS_URL, use_cache=True),
                 self._get_json(client, CARD_EPISODES_URL, use_cache=True),
                 self._get_json(client, GAME_CHARACTERS_URL, use_cache=True),
+            )
+
+    async def fetch_event_data(self) -> tuple[list[dict], list[dict]]:
+        """并发拉取活动主表 / 活动卡牌关系表（结果被缓存）。"""
+        async with httpx.AsyncClient() as client:
+            return await asyncio.gather(
+                self._get_json(client, EVENTS_URL, use_cache=True),
+                self._get_json(client, EVENT_CARDS_URL, use_cache=True),
             )
 
     async def fetch_scenario(self, assetbundle_name: str, scenario_id: str) -> dict:
