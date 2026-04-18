@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+.playwright-cli/
+.venv/
+.DS_Store

@@ -1,0 +1,73 @@
+"""Sekai 数据源客户端。
+
+直接从 sekai-world 公共仓库与 sekai.best 的 CDN 拉取数据，绕开前端页面。
+
+数据源：
+- 卡牌主表:     https://sekai-world.github.io/sekai-master-db-diff/cards.json
+- 卡牌剧情表:   https://sekai-world.github.io/sekai-master-db-diff/cardEpisodes.json
+- 角色表:       https://sekai-world.github.io/sekai-master-db-diff/gameCharacters.json
+- 剧情脚本:     https://storage.sekai.best/sekai-jp-assets/character/member/
+                    {assetbundleName}/{scenarioId}.asset
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Any
+
+import httpx
+
+MASTER_DB_BASE = "https://sekai-world.github.io/sekai-master-db-diff"
+STORAGE_BASE = "https://storage.sekai.best/sekai-jp-assets"
+
+CARDS_URL = f"{MASTER_DB_BASE}/cards.json"
+CARD_EPISODES_URL = f"{MASTER_DB_BASE}/cardEpisodes.json"
+GAME_CHARACTERS_URL = f"{MASTER_DB_BASE}/gameCharacters.json"
+
+
+class SekaiClient:
+    """异步、带内存缓存的 sekai 数据源客户端。"""
+
+    def __init__(self, cache_ttl: int = 3600, timeout: int = 30) -> None:
+        self._cache_ttl = cache_ttl
+        self._timeout = timeout
+        # 每个 URL 一份缓存: {url: (expire_ts, data)}
+        self._cache: dict[str, tuple[float, Any]] = {}
+
+    async def _get_json(
+        self, client: httpx.AsyncClient, url: str, use_cache: bool
+    ) -> Any:
+        if use_cache:
+            cached = self._cache.get(url)
+            if cached and cached[0] > time.time():
+                return cached[1]
+
+        resp = await client.get(url, timeout=self._timeout)
+        resp.raise_for_status()
+        data = resp.json()
+
+        if use_cache:
+            self._cache[url] = (time.time() + self._cache_ttl, data)
+        return data
+
+    async def fetch_master_data(self) -> tuple[list[dict], list[dict], list[dict]]:
+        """并发拉取卡牌 / 卡牌剧情 / 角色 三张主表（结果被缓存）。"""
+        async with httpx.AsyncClient() as client:
+            return await asyncio.gather(
+                self._get_json(client, CARDS_URL, use_cache=True),
+                self._get_json(client, CARD_EPISODES_URL, use_cache=True),
+                self._get_json(client, GAME_CHARACTERS_URL, use_cache=True),
+            )
+
+    async def fetch_scenario(self, assetbundle_name: str, scenario_id: str) -> dict:
+        """拉取指定剧情脚本（character/member 目录下的 .asset，实际是 JSON）。
+
+        剧情脚本体积较大且单次使用，故不走缓存。
+        """
+        url = (
+            f"{STORAGE_BASE}/character/member/"
+            f"{assetbundle_name}/{scenario_id}.asset"
+        )
+        async with httpx.AsyncClient() as client:
+            return await self._get_json(client, url, use_cache=False)

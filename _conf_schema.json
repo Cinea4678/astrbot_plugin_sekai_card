@@ -1,0 +1,25 @@
+{
+  "translate_to_chinese": {
+    "description": "是否在输出时额外附带一份中文翻译",
+    "type": "bool",
+    "hint": "启用后，插件会调用 AstrBot 当前使用的大语言模型对日文剧情和卡面名称进行翻译，并将译文随原文一并输出。注意：开启后每次使用都会调用 LLM，可能消耗 token。",
+    "default": false
+  },
+  "translate_provider_id": {
+    "description": "指定用于翻译的 LLM 提供商 ID（可选）",
+    "type": "string",
+    "hint": "留空则使用当前会话默认的提供商。填写后会调用 context.get_provider_by_id(provider_id) 指定的提供商进行翻译。",
+    "default": ""
+  },
+  "cache_ttl_seconds": {
+    "description": "主数据（cards / cardEpisodes / gameCharacters）缓存时长（秒）",
+    "type": "int",
+    "hint": "避免每次指令都重新下载全量主数据。默认 3600 秒，即 1 小时。",
+    "default": 3600
+  },
+  "http_timeout_seconds": {
+    "description": "单次 HTTP 请求超时时间（秒）",
+    "type": "int",
+    "default": 30
+  }
+}
