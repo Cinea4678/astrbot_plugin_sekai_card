@@ -73,7 +73,9 @@ astrbot_plugin_sekai_card/
 
 - **`main.py`**
   - `SekaiCardPlugin.cmd_sekai_card`：指令主入口，只做参数校验 + 主数据拉取 + 路由。第二个参数 `translate: bool = False` 由 AstrBot 指令解析器自动把 `true/yes/1` / `false/no/0` 转为 bool。
-  - `_emit_card_info` / `_emit_episode`：子流水线，各自负责一类消息输出，通过 `async for msg in ...: yield msg` 串接到主入口。
+  - `_handle_card_with_prefetched`：卡面处理核心。把「卡面信息」和「各篇剧情 (原文)」**收集为 sections**，一次性通过 `_emit_message` 发出（支持合并转发的平台合并为一条 `Nodes`，否则 fallback 为单条拼接链）。
+  - `_emit_message` / `_build_forward_or_chain`：消息打包器。判定 `event.get_platform_name() in _SUPPORTS_FORWARD_PLATFORMS`（当前是 `{aiocqhttp, satori}`）来决定是否用合并转发；新平台原生支持 Node/Nodes 时记得把平台名加到集合里。
+  - `_send_translation_async`：`translate=True` 时开的后台 task，把翻译好的卡名 + 各篇中文剧情再打包成一条合并转发通过 `self.context.send_message(umo, MessageChain(...))` 主动推送。task 由 `self._bg_tasks` 持有，`terminate()` 时统一取消。
   - `_llm_translate(event, text, system_prompt)`：所有 LLM 调用的唯一入口。新增翻译场景请新增一条 `_SYS_PROMPT_*` 常量并复用本方法，不要直接调 `prov.text_chat`。
   - `_split_by_lines`、`_find_by_id`、`_sanitize`、`_make_filename`：模块级纯工具，不依赖 `self`。
 
@@ -165,7 +167,7 @@ https://storage.sekai.best/sekai-jp-assets/thumbnail/chara/{assetbundleName}_nor
 https://storage.sekai.best/sekai-jp-assets/thumbnail/chara/{assetbundleName}_after_training.webp
 ```
 
-想发图就在 `_emit_card_info` 里追加 `Comp.Image.fromURL(url)` 即可，不要保存本地。
+想发图就在 `_build_card_info_components` 里追加 `Comp.Image.fromURL(url)` 即可，不要保存本地。
 
 ## 版本 / 发布
 

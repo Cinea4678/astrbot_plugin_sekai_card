@@ -27,7 +27,7 @@ from typing import Iterable
 
 import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
 from .sekai.characters import resolve_character_id
@@ -37,6 +37,11 @@ from .sekai.formatter import format_card_info, format_scenario
 # 翻译相关常量
 _TRANSLATE_CHUNK_MAX_CHARS = 2000
 _TRANSLATE_CHUNK_SLEEP = 0.2  # 分块之间的短暂 sleep，避免压垮提供商
+
+# 合并转发相关：目前 AstrBot 原生支持 Node/Nodes 的平台（见源码 sources/）
+_SUPPORTS_FORWARD_PLATFORMS = frozenset({"aiocqhttp", "satori"})
+_FORWARD_NODE_NAME = "Sekai"
+_FORWARD_NODE_UIN = "2854196310"
 
 _SYS_PROMPT_CARD_TITLE = (
     "你是一名专业的日译中译者，擅长 Project Sekai（世界计划/プロセカ）"
@@ -94,7 +99,7 @@ _HELP_TEXT = (
     "astrbot_plugin_sekai_card",
     "Cinea4678",
     "从 sekai.best 拉取 Project Sekai 卡牌 / 活动信息与角色剧情并输出文本。",
-    "0.3.1",
+    "0.4.0",
     "https://github.com/Cinea4678/astrbot_plugin_sekai_card",
 )
 class SekaiCardPlugin(Star):
@@ -107,6 +112,7 @@ class SekaiCardPlugin(Star):
         )
         self._data_dir: Path = StarTools.get_data_dir("astrbot_plugin_sekai_card")
         self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._bg_tasks: set[asyncio.Task] = set()
 
     # -----------------------------
     # 指令组：/skcd（别名 /sekai_card）
@@ -223,7 +229,11 @@ class SekaiCardPlugin(Star):
                 yield msg
 
     async def terminate(self) -> None:
-        """插件卸载时无需特殊清理。"""
+        """插件卸载时取消未完成的后台翻译任务。"""
+        for task in list(self._bg_tasks):
+            task.cancel()
+        if self._bg_tasks:
+            await asyncio.gather(*self._bg_tasks, return_exceptions=True)
 
     # -----------------------------
     # 单张卡牌处理
@@ -269,108 +279,74 @@ class SekaiCardPlugin(Star):
             return
 
         character = _find_by_id(characters, card.get("characterId"))
-
-        async for msg in self._emit_card_info(event, card, character, translate):
-            yield msg
+        card_info_comps = [Comp.Plain(format_card_info(card, character))]
 
         card_episodes = sorted(
             (ep for ep in episodes if ep.get("cardId") == card_id),
             key=lambda ep: ep.get("seq", 0),
         )
+
         if not card_episodes:
+            yield event.chain_result(card_info_comps)
             yield event.plain_result("该卡牌没有找到对应的角色剧情条目。")
             return
 
+        # 拉取所有剧情原文、写出 txt，为之后的发送与翻译准备数据
         assetbundle_name = card.get("assetbundleName", "")
+        episode_sections: list[dict] = []
         for ep in card_episodes:
-            async for msg in self._emit_episode(
-                event, card_id, assetbundle_name, ep, translate
-            ):
-                yield msg
-
-    # -----------------------------
-    # 输出流水：卡面信息
-    # -----------------------------
-    async def _emit_card_info(
-        self,
-        event: AstrMessageEvent,
-        card: dict,
-        character: dict | None,
-        translate: bool,
-    ):
-        info_text = format_card_info(card, character)
-
-        prefix = card.get("prefix") or ""
-        if translate and prefix:
+            scenario_id = ep.get("scenarioId")
+            title = ep.get("title") or scenario_id or "剧情"
+            if not scenario_id:
+                continue
             try:
-                prefix_zh = await self._llm_translate(
-                    event, prefix, _SYS_PROMPT_CARD_TITLE
+                scenario = await self._client.fetch_scenario(
+                    assetbundle_name, scenario_id
                 )
             except Exception as e:  # noqa: BLE001
-                logger.warning(f"[sekai_card] 翻译卡名失败: {e}")
-                prefix_zh = None
-            if prefix_zh:
-                info_text = f"{info_text}\n🎴 中文译名：{prefix_zh}"
+                logger.exception(
+                    f"[sekai_card] 拉取剧情失败: card={card_id} scenario={scenario_id}"
+                )
+                yield event.plain_result(f"拉取剧情「{title}」失败：{e}")
+                continue
 
-        yield event.plain_result(info_text)
-
-    # -----------------------------
-    # 输出流水：单个剧情条目
-    # -----------------------------
-    async def _emit_episode(
-        self,
-        event: AstrMessageEvent,
-        card_id: int,
-        assetbundle_name: str,
-        ep: dict,
-        translate: bool,
-    ):
-        scenario_id = ep.get("scenarioId")
-        title = ep.get("title") or scenario_id or "剧情"
-        if not scenario_id:
-            return
-
-        try:
-            scenario = await self._client.fetch_scenario(
-                assetbundle_name, scenario_id
+            text = format_scenario(scenario)
+            path = self._write_txt(card_id, scenario_id, title, "ja", text)
+            episode_sections.append(
+                {
+                    "scenario_id": scenario_id,
+                    "title": title,
+                    "text": text,
+                    "path": path,
+                }
             )
-        except Exception as e:  # noqa: BLE001
-            logger.exception(
-                f"[sekai_card] 拉取剧情失败: card={card_id} scenario={scenario_id}"
+
+        # 原文合并发送（或 fallback）
+        episode_comps = [
+            [
+                Comp.Plain(f"剧情「{sec['title']}」已导出："),
+                Comp.File(file=str(sec["path"]), name=sec["path"].name),
+            ]
+            for sec in episode_sections
+        ]
+        chain = self._build_forward_or_chain(
+            sections=[card_info_comps, *episode_comps],
+            platform_name=event.get_platform_name(),
+        )
+        yield event.chain_result(chain)
+
+        if translate:
+            task = asyncio.create_task(
+                self._send_translation_async(
+                    unified_msg_origin=event.unified_msg_origin,
+                    platform_name=event.get_platform_name(),
+                    event=event,
+                    card=card,
+                    episode_sections=episode_sections,
+                )
             )
-            yield event.plain_result(f"拉取剧情「{title}」失败：{e}")
-            return
-
-        text = format_scenario(scenario)
-
-        # 原文 txt
-        path = self._write_txt(card_id, scenario_id, title, "ja", text)
-        yield event.chain_result(
-            [
-                Comp.Plain(f"剧情「{title}」已导出："),
-                Comp.File(file=str(path), name=path.name),
-            ]
-        )
-
-        if not translate:
-            return
-
-        try:
-            text_zh = await self._translate_scenario(event, text)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"[sekai_card] 翻译剧情失败: {e}", exc_info=True)
-            return
-
-        if not text_zh:
-            return
-
-        path_zh = self._write_txt(card_id, scenario_id, title, "zh", text_zh)
-        yield event.chain_result(
-            [
-                Comp.Plain(f"剧情「{title}」中文译本："),
-                Comp.File(file=str(path_zh), name=path_zh.name),
-            ]
-        )
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
 
     def _write_txt(
         self, card_id: int, scenario_id: str, title: str, lang: str, text: str
@@ -429,6 +405,127 @@ class SekaiCardPlugin(Star):
             if idx < len(chunks):
                 await asyncio.sleep(_TRANSLATE_CHUNK_SLEEP)
         return "\n".join(translated).rstrip() + "\n"
+
+    # -----------------------------
+    # 异步翻译：后台任务中翻译卡名 + 各篇剧情，结果打包成一条合并转发发出
+    # -----------------------------
+    async def _send_translation_async(
+        self,
+        unified_msg_origin: str,
+        platform_name: str,
+        event: AstrMessageEvent,
+        card: dict,
+        episode_sections: list[dict],
+    ) -> None:
+        """后台任务：翻译卡名 + 各篇剧情，结果打包成一条合并转发发出。"""
+        try:
+            card_id = int(card.get("id", 0))
+            sections: list[list] = []
+            failed_titles: list[str] = []
+
+            # 1. 卡名翻译
+            prefix = card.get("prefix") or ""
+            if prefix:
+                prefix_zh = await self._safe_call(
+                    self._llm_translate(event, prefix, _SYS_PROMPT_CARD_TITLE),
+                    label="卡名",
+                )
+                if prefix_zh:
+                    sections.append([Comp.Plain(f"🎴 中文译名：{prefix_zh}")])
+                else:
+                    failed_titles.append("卡名")
+
+            # 2. 各篇剧情翻译
+            for sec in episode_sections:
+                title = sec["title"]
+                text_zh = await self._safe_call(
+                    self._translate_scenario(event, sec["text"]),
+                    label=f"剧情「{title}」",
+                    exc_info=True,
+                )
+                if not text_zh:
+                    failed_titles.append(title)
+                    continue
+                path_zh = self._write_txt(
+                    card_id, sec["scenario_id"], title, "zh", text_zh
+                )
+                sections.append(
+                    [
+                        Comp.Plain(f"剧情「{title}」中文译本："),
+                        Comp.File(file=str(path_zh), name=path_zh.name),
+                    ]
+                )
+
+            # 3. 打包发送
+            if not sections and not failed_titles:
+                return
+
+            if failed_titles:
+                sections.append(
+                    [
+                        Comp.Plain(
+                            "⚠️ 以下内容翻译失败，请稍后重试或检查 LLM 配置：\n  • "
+                            + "\n  • ".join(failed_titles)
+                        )
+                    ]
+                )
+
+            chain = self._build_forward_or_chain(
+                sections=sections,
+                platform_name=platform_name,
+                header_note="🌐 中文翻译结果",
+            )
+            await self.context.send_message(
+                unified_msg_origin,
+                MessageChain(chain=chain),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception("[sekai_card] 后台翻译任务异常")
+
+    async def _safe_call(
+        self,
+        coro,
+        label: str,
+        exc_info: bool = False,
+    ):
+        """await 一个翻译协程；异常记 warning 并返回 None。"""
+        try:
+            return await coro
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[sekai_card] 翻译{label}失败: {e}", exc_info=exc_info)
+            return None
+
+    def _build_forward_or_chain(
+        self,
+        sections: list[list],
+        platform_name: str,
+        header_note: str | None = None,
+    ) -> list:
+        """根据平台决定返回 Nodes 合并转发链，或 fallback 拼接链。"""
+        header = [Comp.Plain(header_note + "\n")] if header_note else []
+        use_forward = (
+            platform_name in _SUPPORTS_FORWARD_PLATFORMS and len(sections) > 1
+        )
+        if use_forward:
+            nodes = [
+                Comp.Node(
+                    uin=_FORWARD_NODE_UIN,
+                    name=_FORWARD_NODE_NAME,
+                    content=list(comps),
+                )
+                for comps in sections
+            ]
+            return [*header, Comp.Nodes(nodes=nodes)]
+
+        # fallback：拼接为单条链，section 之间插入分隔线
+        body: list = []
+        for idx, comps in enumerate(sections):
+            if idx > 0:
+                body.append(Comp.Plain("\n\n────────\n\n"))
+            body.extend(comps)
+        return [*header, *body]
 
 
 # -----------------------------
