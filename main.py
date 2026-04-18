@@ -99,7 +99,7 @@ _HELP_TEXT = (
     "astrbot_plugin_sekai_card",
     "Cinea4678",
     "从 sekai.best 拉取 Project Sekai 卡牌 / 活动信息与角色剧情并输出文本。",
-    "0.4.0",
+    "0.4.1",
     "https://github.com/Cinea4678/astrbot_plugin_sekai_card",
 )
 class SekaiCardPlugin(Star):
@@ -300,7 +300,7 @@ class SekaiCardPlugin(Star):
             if not scenario_id:
                 continue
             try:
-                scenario = await self._client.fetch_scenario(
+                scenario, raw_bytes = await self._client.fetch_scenario(
                     assetbundle_name, scenario_id
                 )
             except Exception as e:  # noqa: BLE001
@@ -312,12 +312,14 @@ class SekaiCardPlugin(Star):
 
             text = format_scenario(scenario)
             path = self._write_txt(card_id, scenario_id, title, "ja", text)
+            asset_path = self._write_asset(card_id, scenario_id, title, raw_bytes)
             episode_sections.append(
                 {
                     "scenario_id": scenario_id,
                     "title": title,
                     "text": text,
                     "path": path,
+                    "asset_path": asset_path,
                 }
             )
 
@@ -326,6 +328,10 @@ class SekaiCardPlugin(Star):
             [
                 Comp.Plain(f"剧情「{sec['title']}」已导出："),
                 Comp.File(file=str(sec["path"]), name=sec["path"].name),
+                Comp.File(
+                    file=str(sec["asset_path"]),
+                    name=sec["asset_path"].name,
+                ),
             ]
             for sec in episode_sections
         ]
@@ -354,6 +360,15 @@ class SekaiCardPlugin(Star):
         filename = _make_filename(card_id, scenario_id, title, lang)
         path = self._data_dir / filename
         path.write_text(text, encoding="utf-8")
+        return path
+
+    def _write_asset(
+        self, card_id: int, scenario_id: str, title: str, raw: bytes
+    ) -> Path:
+        """将原始 .asset（JSON）字节原封不动地落盘。"""
+        filename = _make_asset_filename(card_id, scenario_id, title)
+        path = self._data_dir / filename
+        path.write_bytes(raw)
         return path
 
     # -----------------------------
@@ -606,3 +621,8 @@ def _make_filename(
 ) -> str:
     title_safe = _sanitize(title)[:40]
     return f"card_{card_id}_{scenario_id}_{title_safe}_{lang}.txt"
+
+
+def _make_asset_filename(card_id: int, scenario_id: str, title: str) -> str:
+    title_safe = _sanitize(title)[:40]
+    return f"card_{card_id}_{scenario_id}_{title_safe}.asset"

@@ -7,7 +7,7 @@
 `astrbot_plugin_sekai_card` 是一个 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 插件。它接收 Project Sekai（世界计划 / プロセカ）的卡牌 ID，输出：
 
 1. 一条卡面信息文本消息（卡名 / 角色 / 组合 / 附属组合 / 属性 / 稀有度 / 技能名 / 开放时间 / Gacha 语录）。
-2. 该卡牌前篇、后篇角色剧情的纯文本 `.txt` 附件。
+2. 该卡牌前篇、后篇角色剧情的纯文本 `.txt` 附件，以及原始 `.asset`（JSON）附件。
 3. 可选：指令携带 `translate` 参数（值为 true/yes/1）时，调用 AstrBot 当前 LLM 提供商翻译卡名和剧情，额外输出中文版本。
 
 **入口指令**（指令组 `/skcd`，旧名 `/sekai_card` 作为 alias）：
@@ -63,8 +63,8 @@ astrbot_plugin_sekai_card/
 
 - **`sekai/client.py`**
   - `SekaiClient.fetch_master_data()`：并发拉 3 张主表，**走缓存**（默认 1 小时）。
-  - `SekaiClient.fetch_scenario(assetbundle_name, scenario_id)`：单次拉剧情脚本，**不走缓存**（体积大、单次使用）。
-  - 内部共用 `_get_json(client, url, use_cache)`，不要再加第三条 HTTP 分支；加新数据源时复用这个方法。
+  - `SekaiClient.fetch_scenario(assetbundle_name, scenario_id)`：单次拉剧情脚本，**不走缓存**（体积大、单次使用）。返回 `(parsed_dict, raw_bytes)` 两元组；`raw_bytes` 是 CDN 下发的原始 `.asset` 字节，不走 `json.loads`/`json.dumps` 往返，方便直接落盘作为附件发送。这里不再复用 `_get_json`，单独做一次 `client.get`，同时取 `.json()` 和 `.content`。
+  - 其他主表类数据源共用 `_get_json(client, url, use_cache)`；加新主表时复用这个方法。
 
 - **`sekai/formatter.py`**
   - **只能是纯函数**：输入 dict，输出 str。不要做任何 I/O、logging。
@@ -73,11 +73,11 @@ astrbot_plugin_sekai_card/
 
 - **`main.py`**
   - `SekaiCardPlugin.cmd_sekai_card`：指令主入口，只做参数校验 + 主数据拉取 + 路由。第二个参数 `translate: bool = False` 由 AstrBot 指令解析器自动把 `true/yes/1` / `false/no/0` 转为 bool。
-  - `_handle_card_with_prefetched`：卡面处理核心。把「卡面信息」和「各篇剧情 (原文)」**收集为 sections**，一次性通过 `_emit_message` 发出（支持合并转发的平台合并为一条 `Nodes`，否则 fallback 为单条拼接链）。
+  - `_handle_card_with_prefetched`：卡面处理核心。每篇剧情在拿到 `(scenario_dict, raw_bytes)` 后，分别调 `_write_txt`（渲染后的 `_ja.txt`）与 `_write_asset`（原始 `.asset` 字节）落盘，把两条路径一起放进 `episode_sections[i]`。最终每篇剧情的 section 包含 `Plain + File(txt) + File(asset)` 三个组件，汇同「卡面信息」一起通过 `_emit_message` 发出（支持合并转发的平台合并为一条 `Nodes`，否则 fallback 为单条拼接链）。
   - `_emit_message` / `_build_forward_or_chain`：消息打包器。判定 `event.get_platform_name() in _SUPPORTS_FORWARD_PLATFORMS`（当前是 `{aiocqhttp, satori}`）来决定是否用合并转发；新平台原生支持 Node/Nodes 时记得把平台名加到集合里。
   - `_send_translation_async`：`translate=True` 时开的后台 task，把翻译好的卡名 + 各篇中文剧情再打包成一条合并转发通过 `self.context.send_message(umo, MessageChain(...))` 主动推送。task 由 `self._bg_tasks` 持有，`terminate()` 时统一取消。
   - `_llm_translate(event, text, system_prompt)`：所有 LLM 调用的唯一入口。新增翻译场景请新增一条 `_SYS_PROMPT_*` 常量并复用本方法，不要直接调 `prov.text_chat`。
-  - `_split_by_lines`、`_find_by_id`、`_sanitize`、`_make_filename`：模块级纯工具，不依赖 `self`。
+  - `_split_by_lines`、`_find_by_id`、`_sanitize`、`_make_filename`、`_make_asset_filename`：模块级纯工具，不依赖 `self`。
 
 ## AstrBot 关键 API（本插件用到的）
 
@@ -98,7 +98,7 @@ astrbot_plugin_sekai_card/
 3. **文件名 sanitize**：用户/游戏侧的标题可能含日文、全角括号、特殊符号，调 `_make_filename` 统一处理；新增路径生成逻辑时沿用 `_FILENAME_SAFE_RE`。
 4. **剧情正文不做任何编辑**：`\N`、空格、全角符号、原文换行都要 bit-for-bit 保留；这些是游戏内的排版指令，删掉会丢信息。
 5. **LLM 调用必须 try/except**：翻译失败不能让主流程挂掉，必须 `logger.warning` 后跳过翻译、继续发原文。
-6. **缓存语义**：主数据走 TTL 缓存（默认 1h），剧情脚本不缓存。不要擅自给 `fetch_scenario` 加缓存（体积大、覆盖面广、容易撑爆内存）。
+6. **缓存语义**：主数据走 TTL 缓存（默认 1h），剧情脚本不缓存。不要擅自给 `fetch_scenario` 加缓存（体积大、覆盖面广、容易撑爆内存）。注意 `fetch_scenario` 目前同时向上层返回 `(dict, raw_bytes)`，只做一次 HTTP 调用；不要重构成两次拉取。
 7. **格式化器是纯函数**：`sekai/formatter.py` 里不能出现 `print` / `logger` / `open` / `httpx`。便于脱机单测。
 
 ## 验证 & 调试
@@ -134,8 +134,8 @@ print(format_scenario(json.load(open('/tmp/miku01.asset')))[:500])
 | `/sekai_card` | 返回用法提示 |
 | `/sekai_card abc` | 返回"卡牌ID必须是整数" |
 | `/sekai_card 99999999` | 返回"没有找到 ID 为 ... 的卡牌" |
-| `/sekai_card 1275` | 卡面信息 + 前篇 txt + 后篇 txt |
-| `/sekai_card 1275 true` | 额外 1 条中文译名 + 2 个 `_zh.txt` |
+| `/sekai_card 1275` | 卡面信息 + 前篇 txt/asset + 后篇 txt/asset |
+| `/sekai_card 1275 true` | 额外 1 条中文译名 + 2 个 `_zh.txt`（不重复附带 asset） |
 | 指令带 `translate` 但未配置 LLM | 原文正常，LLM 部分静默跳过并 warning |
 
 ## 常见扩展场景

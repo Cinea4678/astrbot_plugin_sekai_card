@@ -21,7 +21,10 @@
 /sekai_card card 1275       # 等价写法（别名）
 ```
 
-会先返回一条卡面信息的文本消息（卡名、角色、组合、附属组合、属性、稀有度、技能名、开放时间、Gacha 语录），随后分别发送 **前篇** 和 **后篇** 的剧情 txt 文件。
+会先返回一条卡面信息的文本消息（卡名、角色、组合、附属组合、属性、稀有度、技能名、开放时间、Gacha 语录），随后分别发送 **前篇** 和 **后篇** 剧情。每一篇剧情会同时附上：
+
+- 渲染后的纯文本 `.txt`（与 sekai.best 前端 "纯文本" 页面一致）；
+- 原始 `.asset` 文件（实际是 JSON），即从 `storage.sekai.best` 直接下载的字节，未经任何修改，便于本地二次解析。
 
 ### `/skcd event`
 
@@ -81,6 +84,18 @@ KAITO：…………
 - 场景标题（`SpecialEffectData.EffectType == 8` 的 `StringVal`）作为单独一行输出；相邻的标题之间空一行分隔。
 - 对话为 `WindowDisplayName：Body`，保留原文换行和游戏内的 `\N` 软换行符。
 - 标题块与首句台词之间空一行分段。
+
+### 附带的 `.asset` 原始文件
+
+每篇剧情除了发送渲染后的 `.txt`，还会额外附上对应的 `.asset`。该文件就是插件从 `storage.sekai.best/sekai-jp-assets/character/member/{assetbundleName}/{scenarioId}.asset` 拿到的原始字节（实际上是 JSON），**未经过 `json.loads` / `json.dumps` 往返**，字段顺序、空白与缩进与 CDN 下发的内容 bit-for-bit 一致，方便需要自定义解析或二次处理时直接使用。
+
+文件名规则：
+
+```
+card_<cardId>_<scenarioId>_<title>_ja.txt        # 渲染后的纯文本
+card_<cardId>_<scenarioId>_<title>.asset         # 原始 JSON
+card_<cardId>_<scenarioId>_<title>_zh.txt        # translate=true 时的中文译本
+```
 
 ## 数据来源
 

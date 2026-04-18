@@ -72,8 +72,13 @@ class SekaiClient:
                 self._get_json(client, EVENT_CARDS_URL, use_cache=True),
             )
 
-    async def fetch_scenario(self, assetbundle_name: str, scenario_id: str) -> dict:
+    async def fetch_scenario(
+        self, assetbundle_name: str, scenario_id: str
+    ) -> tuple[dict, bytes]:
         """拉取指定剧情脚本（character/member 目录下的 .asset，实际是 JSON）。
+
+        返回 `(parsed_dict, raw_bytes)` —— `raw_bytes` 即 CDN 返回的原始
+        字节，便于把原始 .asset 文件原封不动地附加到消息里。
 
         剧情脚本体积较大且单次使用，故不走缓存。
         """
@@ -82,4 +87,6 @@ class SekaiClient:
             f"{assetbundle_name}/{scenario_id}.asset"
         )
         async with httpx.AsyncClient() as client:
-            return await self._get_json(client, url, use_cache=False)
+            resp = await client.get(url, timeout=self._timeout)
+            resp.raise_for_status()
+            return resp.json(), resp.content
