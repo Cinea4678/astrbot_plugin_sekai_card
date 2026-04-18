@@ -3,6 +3,7 @@
 指令：
     /skcd card <card_id> [translate]
     /skcd event <event_id> [character] [translate]
+    /skcd help
 
     旧的 /sekai_card 作为 alias 保留，也可写作
     /sekai_card card 1275 或 /sekai_card event 202 miku。
@@ -61,12 +62,39 @@ _FILENAME_SAFE_RE = re.compile(r"[^\w\-\u3040-\u30ff\u4e00-\u9fff]+", re.UNICODE
 
 _JST = timezone(timedelta(hours=9))
 
+_HELP_TEXT = (
+    "🎴 Sekai 卡牌剧情插件　使用说明\n"
+    "指令组：/skcd（别名 /sekai_card）\n"
+    "\n"
+    "子指令：\n"
+    "  • /skcd card <卡牌ID> [translate]\n"
+    "      拉取指定卡牌的卡面信息，以及前篇 / 后篇角色剧情（.txt 附件）。\n"
+    "      例：/skcd card 1275\n"
+    "          /skcd card 1275 true   # 额外输出中文译名与译文\n"
+    "\n"
+    "  • /skcd event <活动ID> [角色昵称] [translate]\n"
+    "      不带角色昵称：输出活动概览与活动卡牌列表。\n"
+    "      带角色昵称：输出该活动中该角色的卡面信息与剧情。\n"
+    "      例：/skcd event 202\n"
+    "          /skcd event 202 miku\n"
+    "          /skcd event 202 miku true\n"
+    "\n"
+    "  • /skcd help\n"
+    "      输出本帮助信息。\n"
+    "\n"
+    "参数说明：\n"
+    "  translate 接受 true/false/yes/no/1/0，省略则为 false。\n"
+    "  角色昵称支持常见罗马音 / 中日文名（如 miku、saki、冬弥、绘名 等）。\n"
+    "\n"
+    "Made by Cinea"
+)
+
 
 @register(
     "astrbot_plugin_sekai_card",
     "Cinea4678",
     "从 sekai.best 拉取 Project Sekai 卡牌 / 活动信息与角色剧情并输出文本。",
-    "0.3.0",
+    "0.3.1",
     "https://github.com/Cinea4678/astrbot_plugin_sekai_card",
 )
 class SekaiCardPlugin(Star):
@@ -91,6 +119,14 @@ class SekaiCardPlugin(Star):
           card  <卡牌ID> [translate]
           event <活动ID> [角色昵称] [translate]
         """
+
+    # -----------------------------
+    # 子指令：/skcd help
+    # -----------------------------
+    @skcd.command("help")
+    async def cmd_help(self, event: AstrMessageEvent):
+        """/skcd help —— 输出指令使用说明与作者信息。"""
+        yield event.plain_result(_HELP_TEXT)
 
     # -----------------------------
     # 子指令：/skcd card
