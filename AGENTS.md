@@ -8,9 +8,9 @@
 
 1. 一条卡面信息文本消息（卡名 / 角色 / 组合 / 附属组合 / 属性 / 稀有度 / 技能名 / 开放时间 / Gacha 语录）。
 2. 该卡牌前篇、后篇角色剧情的纯文本 `.txt` 附件。
-3. 可选：启用 `translate_to_chinese` 时，调用 AstrBot 当前 LLM 提供商翻译卡名和剧情，额外输出中文版本。
+3. 可选：指令携带 `translate` 参数（值为 true/yes/1）时，调用 AstrBot 当前 LLM 提供商翻译卡名和剧情，额外输出中文版本。
 
-**入口指令**：`/sekai_card <卡牌ID>`（例：`/sekai_card 1275`）。
+**入口指令**：`/sekai_card <卡牌ID> [translate]`（例：`/sekai_card 1275`、`/sekai_card 1275 true`）。`translate` 参数接受 `true/false/yes/no/1/0`，省略则为 `false`。
 
 ## 数据来源（非常重要）
 
@@ -65,7 +65,7 @@ astrbot_plugin_sekai_card/
   - 剧情渲染的魔法数字（`_ACTION_TALK=1`、`_ACTION_SPECIAL_EFFECT=6`、`_EFFECT_SCENE_TITLE=8`）已命名；新增分支请同样常量化。
 
 - **`main.py`**
-  - `SekaiCardPlugin.cmd_sekai_card`：指令主入口，只做参数校验 + 主数据拉取 + 路由。
+  - `SekaiCardPlugin.cmd_sekai_card`：指令主入口，只做参数校验 + 主数据拉取 + 路由。第二个参数 `translate: bool = False` 由 AstrBot 指令解析器自动把 `true/yes/1` / `false/no/0` 转为 bool。
   - `_emit_card_info` / `_emit_episode`：子流水线，各自负责一类消息输出，通过 `async for msg in ...: yield msg` 串接到主入口。
   - `_llm_translate(event, text, system_prompt)`：所有 LLM 调用的唯一入口。新增翻译场景请新增一条 `_SYS_PROMPT_*` 常量并复用本方法，不要直接调 `prov.text_chat`。
   - `_split_by_lines`、`_find_by_id`、`_sanitize`、`_make_filename`：模块级纯工具，不依赖 `self`。
@@ -126,8 +126,8 @@ print(format_scenario(json.load(open('/tmp/miku01.asset')))[:500])
 | `/sekai_card abc` | 返回"卡牌ID必须是整数" |
 | `/sekai_card 99999999` | 返回"没有找到 ID 为 ... 的卡牌" |
 | `/sekai_card 1275` | 卡面信息 + 前篇 txt + 后篇 txt |
-| 开启 `translate_to_chinese` | 额外 1 条中文译名 + 2 个 `_zh.txt` |
-| 开启翻译但未配置 LLM | 原文正常，LLM 部分静默跳过并 warning |
+| `/sekai_card 1275 true` | 额外 1 条中文译名 + 2 个 `_zh.txt` |
+| 指令带 `translate` 但未配置 LLM | 原文正常，LLM 部分静默跳过并 warning |
 
 ## 常见扩展场景
 

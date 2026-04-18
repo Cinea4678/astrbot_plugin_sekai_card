@@ -5,16 +5,19 @@
 ## 指令
 
 ```
-/sekai_card <卡牌ID>
+/sekai_card <卡牌ID> [translate]
 ```
 
 例如：
 
 ```
-/sekai_card 1275
+/sekai_card 1275              # 仅输出日文原文
+/sekai_card 1275 true         # 额外调用 LLM 输出中文译名与译文 txt
 ```
 
 会先返回一条卡面信息的文本消息（卡名、角色、组合、附属组合、属性、稀有度、技能名、开放时间、Gacha 语录），随后分别发送 **前篇** 和 **后篇** 的剧情 txt 文件。
+
+`translate` 参数接受 `true` / `false` / `yes` / `no` / `1` / `0`，省略时等同于 `false`。
 
 ## 剧情文本格式
 
@@ -48,14 +51,14 @@ KAITO：…………
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `translate_to_chinese` | bool | false | 开启后会额外调用 LLM 把卡名和两篇剧情翻译成中文，并作为附加消息/附加 txt 文件发送。 |
-| `translate_provider_id` | string | `""` | 指定用于翻译的 LLM 提供商 ID，留空则使用当前会话默认提供商。 |
+| `translate_provider_id` | string | `""` | 指定用于翻译的 LLM 提供商 ID，留空则使用当前会话默认提供商。仅在指令带 `translate` 参数时生效。 |
 | `cache_ttl_seconds` | int | 3600 | 主数据（cards / cardEpisodes / gameCharacters）的内存缓存时长。 |
 | `http_timeout_seconds` | int | 30 | 单次 HTTP 请求超时时间。 |
 
 ## 翻译说明
 
-- 翻译通过 AstrBot 配置的大语言模型完成，开启 `translate_to_chinese` 会显著增加 token 消耗。
+- 是否翻译由指令参数 `translate` 控制，开启时会额外调用 LLM 把卡名和两篇剧情翻译成中文，卡面译名附在卡面信息消息末尾，前/后篇剧情译文作为独立的 `_zh.txt` 文件发送。
+- 翻译通过 AstrBot 配置的大语言模型完成，打开翻译会显著增加 token 消耗。
 - 剧情文本较长时会分块（默认每块 ≤ 2000 字符）提交给 LLM，按行拼回。
 - Prompt 已要求：保留行结构、保留 `\N` 与空行、角色名同时翻译、只输出译文本体。但 LLM 本身无法保证 100% 严格遵守，如需更稳定的效果，建议使用能力较强的模型。
 

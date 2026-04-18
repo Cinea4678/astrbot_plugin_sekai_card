@@ -1,13 +1,13 @@
 """astrbot_plugin_sekai_card - Project Sekai 卡牌信息 & 剧情导出插件。
 
 指令：
-    /sekai_card <card_id>
+    /sekai_card <card_id> [translate]
 
 功能：
     1. 拉取指定卡牌的基础信息并作为文本消息发送。
     2. 拉取该卡牌的前篇/后篇剧情脚本，渲染为纯文本并作为 txt 文件发送。
-    3. （可选）启用 translate_to_chinese 后，调用 LLM 翻译卡面名称和剧情正文，
-       并额外输出译文版本。
+    3. （可选）当 translate 参数为真（true/yes/1）时，调用 LLM 翻译卡面名称
+       和剧情正文，并额外输出译文版本。
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ _FILENAME_SAFE_RE = re.compile(r"[^\w\-\u3040-\u30ff\u4e00-\u9fff]+", re.UNICODE
     "astrbot_plugin_sekai_card",
     "Cinea4678",
     "从 sekai.best 拉取 Project Sekai 卡牌信息与角色剧情并输出文本。",
-    "0.1.0",
+    "0.2.0",
     "https://github.com/Cinea4678/astrbot_plugin_sekai_card",
 )
 class SekaiCardPlugin(Star):
@@ -75,12 +75,21 @@ class SekaiCardPlugin(Star):
     # -----------------------------
     @filter.command("sekai_card")
     async def cmd_sekai_card(
-        self, event: AstrMessageEvent, card_id: int | None = None
+        self,
+        event: AstrMessageEvent,
+        card_id: int | None = None,
+        translate: bool = False,
     ):
-        """拉取卡牌信息与剧情。用法：/sekai_card <卡牌ID>"""
+        """拉取卡牌信息与剧情。
+
+        用法：/sekai_card <卡牌ID> [translate]
+        translate 传 true/yes/1 时，会调用 LLM 额外输出中文译名与译文 txt。
+        """
 
         if card_id is None:
-            yield event.plain_result("用法：/sekai_card <卡牌ID>，例如 /sekai_card 1275")
+            yield event.plain_result(
+                "用法：/sekai_card <卡牌ID> [translate]，例如 /sekai_card 1275 true"
+            )
             return
 
         try:
@@ -104,7 +113,6 @@ class SekaiCardPlugin(Star):
             return
 
         character = _find_by_id(characters, card.get("characterId"))
-        translate = bool(self.config.get("translate_to_chinese", False))
 
         # -------- 卡面信息 --------
         async for msg in self._emit_card_info(event, card, character, translate):
