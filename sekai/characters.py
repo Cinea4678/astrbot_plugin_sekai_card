@@ -21,30 +21,30 @@ from typing import Iterable
 # (character_id, [nickname, ...]) — nickname 全部小写、纯 ASCII 或常见汉字
 _NICKNAMES: tuple[tuple[int, tuple[str, ...]], ...] = (
     # Leo/need
-    (1, ("ichika", "icchan", "一歌", "ichika hoshino", "hoshino", "星乃")),
+    (1, ("ick", "ichika", "icchan", "一歌", "ichika hoshino", "hoshino", "星乃")),
     (2, ("saki", "sacchan", "咲希", "tenma saki")),
-    (3, ("honami", "honacha", "穂波", "穗波", "mochizuki")),
+    (3, ("hnm", "honami", "honacha", "穂波", "穗波", "mochizuki")),
     (4, ("shiho", "志歩", "shippo", "hinomori shiho")),
     # MORE MORE JUMP!
-    (5, ("minori", "minorin", "みのり", "hanasato")),
-    (6, ("haruka", "kiritani", "桐谷", "遥")),
+    (5, ("mnr", "minori", "minorin", "みのり", "hanasato")),
+    (6, ("hrk", "haruka", "kiritani", "桐谷", "遥")),
     (7, ("airi", "愛莉", "爱莉", "momoi")),
-    (8, ("shizuku", "雫", "hinomori shizuku")),
+    (8, ("szk", "shizuku", "雫", "hinomori shizuku")),
     # Vivid BAD SQUAD
-    (9, ("kohane", "こはね", "azusawa")),
+    (9, ("khn", "kohane", "こはね", "azusawa")),
     (10, ("an", "anhan", "杏", "shiraishi")),
-    (11, ("akito", "彰人", "shinonome akito")),
+    (11, ("akt", "akito", "彰人", "shinonome akito")),
     (12, ("toya", "touya", "tooya", "冬弥", "aoyagi")),
     # Wonderlands×Showtime
-    (13, ("tsukasa", "司", "tenma tsukasa")),
+    (13, ("tks", "tsukasa", "司", "tenma tsukasa")),
     (14, ("emu", "えむ", "ootori", "otori")),
     (15, ("nene", "寧々", "宁宁", "kusanagi")),
     (16, ("rui", "類", "类", "kamishiro")),
     # 25時、ナイトコードで。
-    (17, ("kanade", "奏", "yoisaki")),
-    (18, ("mafuyu", "まふゆ", "真冬", "asahina")),
+    (17, ("knd", "kanade", "奏", "yoisaki")),
+    (18, ("mfy", "mafuyu", "まふゆ", "真冬", "asahina")),
     (19, ("ena", "絵名", "绘名", "shinonome ena")),
-    (20, ("mizuki", "瑞希", "akiyama")),
+    (20, ("mzk", "mizuki", "瑞希", "akiyama")),
     # Virtual Singer
     (21, ("miku", "hatsune", "初音", "ミク", "未来")),
     (22, ("rin", "kagamine rin", "リン", "鏡音リン", "鏡音鈴")),

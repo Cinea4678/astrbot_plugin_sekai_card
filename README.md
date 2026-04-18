@@ -51,18 +51,18 @@
 
 | 昵称 | 角色 | 昵称 | 角色 |
 |---|---|---|---|
-| miku / 初音 / ミク | 初音未来 | kanade / 奏 | 宵崎奏 |
-| ichika / icchan / 一歌 | 星乃一歌 | mafuyu / まふゆ / 真冬 | 朝比奈真冬 |
+| miku / 初音 / ミク | 初音未来 | knd / kanade / 奏 | 宵崎奏 |
+| ick / ichika / icchan / 一歌 | 星乃一歌 | mfy / mafuyu / まふゆ / 真冬 | 朝比奈真冬 |
 | saki / 咲希 | 天马咲希 | ena / 絵名 / 绘名 | 东云绘名 |
-| honami / honacha / 穂波 | 望月穂波 | mizuki / 瑞希 | 晓山瑞希 |
+| hnm / honami / honacha / 穂波 | 望月穂波 | mzk / mizuki / 瑞希 | 晓山瑞希 |
 | shiho / 志歩 | 日野森志歩 | rin / リン | 镜音 Rin |
-| minori / minorin | 花里みのり | len / レン | 镜音 Len |
-| haruka / 遥 | 桐谷遥 | luka / ルカ / 巡音 | 巡音 Luka |
+| mnr / minori / minorin | 花里みのり | len / レン | 镜音 Len |
+| hrk / haruka / 遥 | 桐谷遥 | luka / ルカ / 巡音 | 巡音 Luka |
 | airi / 愛莉 | 桃井愛莉 | meiko | MEIKO |
-| shizuku / 雫 | 日野森雫 | kaito | KAITO |
-| kohane / こはね | 小豆沢こはね | an / 杏 | 白石杏 |
-| akito / 彰人 | 东云彰人 | toya / touya / 冬弥 | 青柳冬弥 |
-| tsukasa / 司 | 天马司 | emu / えむ | 凤えむ |
+| szk / shizuku / 雫 | 日野森雫 | kaito | KAITO |
+| khn / kohane / こはね | 小豆沢こはね | an / 杏 | 白石杏 |
+| akt / akito / 彰人 | 东云彰人 | toya / touya / 冬弥 | 青柳冬弥 |
+| tks / tsukasa / 司 | 天马司 | emu / えむ | 凤えむ |
 | nene / 寧々 | 草薙寧々 | rui / 類 | 神代類 |
 
 `translate` 参数接受 `true` / `false` / `yes` / `no` / `1` / `0`，省略时等同于 `false`。
