@@ -1,8 +1,9 @@
 {
   "translate_provider_id": {
-    "description": "指定用于翻译的 LLM 提供商 ID（可选）",
+    "description": "翻译专用 LLM Provider ID（可选）",
     "type": "string",
-    "hint": "留空则使用当前会话默认的提供商。填写后会调用 context.get_provider_by_id(provider_id) 指定的提供商进行翻译。仅在指令带 translate 参数时生效。",
+    "_special": "select_provider",
+    "hint": "选择用于翻译卡名和剧情的 LLM Provider。留空则使用当前会话的默认 Provider。仅在指令带 translate 参数时生效。",
     "default": ""
   },
   "cache_ttl_seconds": {
