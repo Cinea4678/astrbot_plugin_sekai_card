@@ -95,7 +95,7 @@ def format_scenario(scenario: dict[str, Any]) -> str:
     格式约定：
     - 对话：`WindowDisplayName：Body`，Body 中的原始换行与 `\\N` 都保留原样。
     - 场景切换（SpecialEffectData.EffectType == 8）的 `StringVal` 作为场景标题输出；
-      连续的场景标题紧挨着输出，首句台词前空一行。
+      连续的场景标题之间也空一行分隔，标题块与首句台词之间空一行。
     """
 
     talks = scenario.get("TalkData") or []
@@ -128,8 +128,8 @@ def format_scenario(scenario: dict[str, Any]) -> str:
             title = effect.get("StringVal")
             if not title:
                 continue
-            if prev_was_talk:
-                out.append("")  # 从台词切到新标题，空一行分段
+            if prev_was_talk or prev_was_title:
+                out.append("")  # 标题之间 / 台词到标题之间都空一行分段
             out.append(title)
             prev_was_title = True
             prev_was_talk = False

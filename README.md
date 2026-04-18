@@ -25,6 +25,7 @@
 
 ```
 誰もいないセカイ
+
 湖
 
 ミク：…………あ
@@ -32,7 +33,7 @@ KAITO：…………
 ...
 ```
 
-- 场景标题（`SpecialEffectData.EffectType == 8` 的 `StringVal`）作为单独一行输出；相邻的标题紧挨着。
+- 场景标题（`SpecialEffectData.EffectType == 8` 的 `StringVal`）作为单独一行输出；相邻的标题之间空一行分隔。
 - 对话为 `WindowDisplayName：Body`，保留原文换行和游戏内的 `\N` 软换行符。
 - 标题块与首句台词之间空一行分段。
 
