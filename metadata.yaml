@@ -1,6 +1,6 @@
 name: astrbot_plugin_sekai_card
 desc: 从 sekai.best 拉取 Project Sekai 卡牌 / 活动信息与角色剧情（前篇/后篇）并输出为文本文件。
-version: 0.5.1
+version: 0.6.0
 author: Cinea4678
 repo: https://github.com/Cinea4678/astrbot_plugin_sekai_card
 display_name: Sekai 卡牌剧情

@@ -20,10 +20,7 @@
 from __future__ import annotations
 
 import asyncio
-import re
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable
 
 import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, logger
@@ -31,79 +28,24 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
 from .sekai.characters import resolve_character_id
-from .sekai.client import STORAGE_BASE, SekaiClient
+from .sekai.client import SekaiClient
+from .sekai.constants import HELP_TEXT
+from .sekai.events import (
+    character_display_name,
+    find_by_id,
+    format_event_summary,
+)
 from .sekai.formatter import format_card_info, format_scenario
-
-# 卡图：sekai.best CDN 上的大图（特训前 / 特训后）。
-# 仅 rarity_3 / rarity_4 同时存在特训后图，其它稀有度只发特训前。
-_RARITIES_WITH_AFTER_TRAINING = frozenset({"rarity_3", "rarity_4"})
-
-# 翻译相关常量
-_TRANSLATE_CHUNK_MAX_CHARS = 2000
-_TRANSLATE_CHUNK_SLEEP = 0.2  # 分块之间的短暂 sleep，避免压垮提供商
-
-# 合并转发相关：目前 AstrBot 原生支持 Node/Nodes 的平台（见源码 sources/）
-_SUPPORTS_FORWARD_PLATFORMS = frozenset({"aiocqhttp", "satori"})
-_FORWARD_NODE_NAME = "Sekai"
-_FORWARD_NODE_UIN = "2854196310"
-
-_SYS_PROMPT_CARD_TITLE = (
-    "你是一名专业的日译中译者，擅长 Project Sekai（世界计划/プロセカ）"
-    "相关文本翻译。请将用户给的卡面日文标题翻译成中文，保留原意与风格，"
-    "用简体中文输出，只输出译文本体，不要添加解释、括号或引号。"
-)
-
-_SYS_PROMPT_SCENARIO = (
-    "你是一名专业的日译中译者，熟悉 Project Sekai（世界计划 / プロセカ）的世界观"
-    "与角色口癖。请把用户给的日文剧情脚本翻译成自然、流畅的简体中文。"
-    "严格遵守以下规则：\n"
-    "1. 保留原脚本的行结构。每一行都要原样对应一行输出，不要合并或拆分行。\n"
-    "2. 对话行的格式为 `角色名：对白`，请把角色名也翻译成中文（如 ミク→初音未来、"
-    "KAITO→KAITO、絵名→绘名、まふゆ→真冬、奏→奏 等），冒号使用全角 `：`。\n"
-    "3. 没有冒号的行是场景标题或旁白，直接翻译即可，保持独立成行。\n"
-    "4. 原文中的换行符 `\\N` 必须原样保留，不要替换为真实换行。\n"
-    "5. 空行必须保留为空行。\n"
-    "6. 只输出翻译结果本体，不要添加任何解释、前后缀或标注。"
-)
-
-# 文件名安全字符：字母数字下划线、CJK 统一表意、平假名、片假名
-_FILENAME_SAFE_RE = re.compile(r"[^\w\-\u3040-\u30ff\u4e00-\u9fff]+", re.UNICODE)
-
-_JST = timezone(timedelta(hours=9))
-
-_HELP_TEXT = (
-    "🎴 Sekai 卡牌剧情插件　使用说明\n"
-    "指令组：/skcd（别名 /sekai_card）\n"
-    "\n"
-    "子指令：\n"
-    "  • /skcd card <卡牌ID> [translate]\n"
-    "      拉取指定卡牌的卡面信息，以及前篇 / 后篇角色剧情（.txt 附件）。\n"
-    "      例：/skcd card 1275\n"
-    "          /skcd card 1275 true   # 额外输出中文译名与译文\n"
-    "\n"
-    "  • /skcd event <活动ID> [角色昵称] [translate]\n"
-    "      不带角色昵称：输出活动概览与活动卡牌列表。\n"
-    "      带角色昵称：输出该活动中该角色的卡面信息与剧情。\n"
-    "      例：/skcd event 202\n"
-    "          /skcd event 202 miku\n"
-    "          /skcd event 202 miku true\n"
-    "\n"
-    "  • /skcd help\n"
-    "      输出本帮助信息。\n"
-    "\n"
-    "参数说明：\n"
-    "  translate 接受 true/false/yes/no/1/0，省略则为 false。\n"
-    "  角色昵称支持常见罗马音 / 中日文名（如 miku、saki、冬弥、绘名 等）。\n"
-    "\n"
-    "Made by Cinea"
-)
+from .sekai.messaging import build_card_image_sections, build_forward_or_chain
+from .sekai.storage import write_asset, write_txt
+from .sekai.translator import Translator
 
 
 @register(
     "astrbot_plugin_sekai_card",
     "Cinea4678",
     "从 sekai.best 拉取 Project Sekai 卡牌 / 活动信息与角色剧情并输出文本。",
-    "0.5.0",
+    "0.6.0",
     "https://github.com/Cinea4678/astrbot_plugin_sekai_card",
 )
 class SekaiCardPlugin(Star):
@@ -116,6 +58,7 @@ class SekaiCardPlugin(Star):
         )
         self._data_dir: Path = StarTools.get_data_dir("astrbot_plugin_sekai_card")
         self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._translator = Translator(context, config)
         self._bg_tasks: set[asyncio.Task] = set()
 
     # -----------------------------
@@ -130,17 +73,11 @@ class SekaiCardPlugin(Star):
           event <活动ID> [角色昵称] [translate]
         """
 
-    # -----------------------------
-    # 子指令：/skcd help
-    # -----------------------------
     @skcd.command("help")
     async def cmd_help(self, event: AstrMessageEvent):
         """/skcd help —— 输出指令使用说明与作者信息。"""
-        yield event.plain_result(_HELP_TEXT)
+        yield event.plain_result(HELP_TEXT)
 
-    # -----------------------------
-    # 子指令：/skcd card
-    # -----------------------------
     @skcd.command("card")
     async def cmd_card(
         self,
@@ -161,9 +98,6 @@ class SekaiCardPlugin(Star):
         async for msg in self._handle_card(event, card_id, translate):
             yield msg
 
-    # -----------------------------
-    # 子指令：/skcd event
-    # -----------------------------
     @skcd.command("event")
     async def cmd_event(
         self,
@@ -193,7 +127,7 @@ class SekaiCardPlugin(Star):
             yield event.plain_result(f"拉取 sekai 主数据失败：{e}")
             return
 
-        ev = _find_by_id(events, event_id)
+        ev = find_by_id(events, event_id)
         if not ev:
             yield event.plain_result(f"没有找到 ID 为 {event_id} 的活动。")
             return
@@ -204,9 +138,7 @@ class SekaiCardPlugin(Star):
 
         # 没指定角色：输出活动概览 + 卡牌列表
         if not character:
-            yield event.plain_result(
-                _format_event_summary(ev, ev_cards, characters)
-            )
+            yield event.plain_result(format_event_summary(ev, ev_cards, characters))
             return
 
         # 指定了角色：解析昵称（character 可能因纯数字被自动转成 int）
@@ -220,8 +152,8 @@ class SekaiCardPlugin(Star):
 
         matched = [c for c in ev_cards if c.get("characterId") == char_id]
         if not matched:
-            char = _find_by_id(characters, char_id)
-            name = _character_display_name(char) if char else f"ID {char_id}"
+            char = find_by_id(characters, char_id)
+            name = character_display_name(char) if char else f"ID {char_id}"
             yield event.plain_result(f"活动 {event_id} 里没有『{name}』的卡牌。")
             return
 
@@ -277,12 +209,12 @@ class SekaiCardPlugin(Star):
         episodes: list[dict],
         characters: list[dict],
     ):
-        card = _find_by_id(cards, card_id)
+        card = find_by_id(cards, card_id)
         if not card:
             yield event.plain_result(f"没有找到 ID 为 {card_id} 的卡牌。")
             return
 
-        character = _find_by_id(characters, card.get("characterId"))
+        character = find_by_id(characters, card.get("characterId"))
         card_info_comps = [Comp.Plain(format_card_info(card, character))]
 
         card_episodes = sorted(
@@ -290,10 +222,10 @@ class SekaiCardPlugin(Star):
             key=lambda ep: ep.get("seq", 0),
         )
 
-        image_sections = _build_card_image_sections(card)
+        image_sections = build_card_image_sections(card)
 
         if not card_episodes:
-            chain = self._build_forward_or_chain(
+            chain = build_forward_or_chain(
                 sections=[card_info_comps, *image_sections],
                 platform_name=event.get_platform_name(),
             )
@@ -321,8 +253,10 @@ class SekaiCardPlugin(Star):
                 continue
 
             text = format_scenario(scenario)
-            path = self._write_txt(card_id, scenario_id, title, "ja", text)
-            asset_path = self._write_asset(card_id, scenario_id, title, raw_bytes)
+            path = write_txt(self._data_dir, card_id, scenario_id, title, "ja", text)
+            asset_path = write_asset(
+                self._data_dir, card_id, scenario_id, title, raw_bytes
+            )
             episode_sections.append(
                 {
                     "scenario_id": scenario_id,
@@ -354,7 +288,7 @@ class SekaiCardPlugin(Star):
                     ),
                 ]
             )
-        chain = self._build_forward_or_chain(
+        chain = build_forward_or_chain(
             sections=[card_info_comps, *episode_comps, *image_sections],
             platform_name=event.get_platform_name(),
         )
@@ -372,73 +306,6 @@ class SekaiCardPlugin(Star):
             )
             self._bg_tasks.add(task)
             task.add_done_callback(self._bg_tasks.discard)
-
-    def _write_txt(
-        self, card_id: int, scenario_id: str, title: str, lang: str, text: str
-    ) -> Path:
-        filename = _make_filename(card_id, scenario_id, title, lang)
-        path = self._data_dir / filename
-        path.write_text(text, encoding="utf-8")
-        return path
-
-    def _write_asset(
-        self, card_id: int, scenario_id: str, title: str, raw: bytes
-    ) -> Path:
-        """将原始 .asset（JSON）字节原封不动地落盘。"""
-        filename = _make_asset_filename(card_id, scenario_id, title)
-        path = self._data_dir / filename
-        path.write_bytes(raw)
-        return path
-
-    # -----------------------------
-    # LLM 翻译
-    # -----------------------------
-    def _get_provider(self, event: AstrMessageEvent):
-        provider_id = (self.config.get("translate_provider_id") or "").strip()
-        if provider_id:
-            prov = self.context.get_provider_by_id(provider_id=provider_id)
-            if prov:
-                return prov
-            logger.warning(
-                f"[sekai_card] translate_provider_id={provider_id!r} 未找到，回退到会话默认提供商"
-            )
-        return self.context.get_using_provider(umo=event.unified_msg_origin)
-
-    async def _llm_translate(
-        self,
-        event: AstrMessageEvent,
-        text: str,
-        system_prompt: str,
-    ) -> str | None:
-        """调用 LLM 进行一次翻译调用，返回译文；没有可用提供商时返回 None。"""
-        prov = self._get_provider(event)
-        if not prov:
-            logger.warning("[sekai_card] 当前没有可用的 LLM 提供商，跳过翻译")
-            return None
-        resp = await prov.text_chat(
-            prompt=text,
-            context=[],
-            system_prompt=system_prompt,
-        )
-        return (resp.completion_text or "").strip() or None
-
-    async def _translate_scenario(
-        self, event: AstrMessageEvent, text: str
-    ) -> str | None:
-        """翻译整段剧情文本。太长则按行分块翻译再拼接。"""
-        chunks = list(_split_by_lines(text, _TRANSLATE_CHUNK_MAX_CHARS))
-        translated: list[str] = []
-        for idx, chunk in enumerate(chunks, 1):
-            logger.info(
-                f"[sekai_card] 翻译剧情分块 {idx}/{len(chunks)} ({len(chunk)} 字符)"
-            )
-            piece = await self._llm_translate(event, chunk, _SYS_PROMPT_SCENARIO)
-            if piece is None:
-                return None
-            translated.append(piece)
-            if idx < len(chunks):
-                await asyncio.sleep(_TRANSLATE_CHUNK_SLEEP)
-        return "\n".join(translated).rstrip() + "\n"
 
     # -----------------------------
     # 异步翻译：后台任务中翻译卡名 + 各篇剧情，结果打包成一条合并转发发出
@@ -460,8 +327,8 @@ class SekaiCardPlugin(Star):
             # 1. 卡名翻译
             prefix = card.get("prefix") or ""
             if prefix:
-                prefix_zh = await self._safe_call(
-                    self._llm_translate(event, prefix, _SYS_PROMPT_CARD_TITLE),
+                prefix_zh = await self._translator.safe_call(
+                    self._translator.translate_card_title(event, prefix),
                     label="卡名",
                 )
                 if prefix_zh:
@@ -472,16 +339,16 @@ class SekaiCardPlugin(Star):
             # 2. 各篇剧情翻译
             for sec in episode_sections:
                 title = sec["title"]
-                text_zh = await self._safe_call(
-                    self._translate_scenario(event, sec["text"]),
+                text_zh = await self._translator.safe_call(
+                    self._translator.translate_scenario(event, sec["text"]),
                     label=f"剧情「{title}」",
                     exc_info=True,
                 )
                 if not text_zh:
                     failed_titles.append(title)
                     continue
-                path_zh = self._write_txt(
-                    card_id, sec["scenario_id"], title, "zh", text_zh
+                path_zh = write_txt(
+                    self._data_dir, card_id, sec["scenario_id"], title, "zh", text_zh
                 )
                 sections.append(
                     [
@@ -504,7 +371,7 @@ class SekaiCardPlugin(Star):
                     ]
                 )
 
-            chain = self._build_forward_or_chain(
+            chain = build_forward_or_chain(
                 sections=sections,
                 platform_name=platform_name,
                 header_note="🌐 中文翻译结果",
@@ -517,157 +384,3 @@ class SekaiCardPlugin(Star):
             raise
         except Exception:  # noqa: BLE001
             logger.exception("[sekai_card] 后台翻译任务异常")
-
-    async def _safe_call(
-        self,
-        coro,
-        label: str,
-        exc_info: bool = False,
-    ):
-        """await 一个翻译协程；异常记 warning 并返回 None。"""
-        try:
-            return await coro
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"[sekai_card] 翻译{label}失败: {e}", exc_info=exc_info)
-            return None
-
-    def _build_forward_or_chain(
-        self,
-        sections: list[list],
-        platform_name: str,
-        header_note: str | None = None,
-    ) -> list:
-        """根据平台决定返回 Nodes 合并转发链，或 fallback 拼接链。"""
-        header = [Comp.Plain(header_note + "\n")] if header_note else []
-        use_forward = (
-            platform_name in _SUPPORTS_FORWARD_PLATFORMS and len(sections) > 1
-        )
-        if use_forward:
-            nodes = [
-                Comp.Node(
-                    uin=_FORWARD_NODE_UIN,
-                    name=_FORWARD_NODE_NAME,
-                    content=list(comps),
-                )
-                for comps in sections
-            ]
-            return [*header, Comp.Nodes(nodes=nodes)]
-
-        # fallback：拼接为单条链，section 之间插入分隔线
-        body: list = []
-        for idx, comps in enumerate(sections):
-            if idx > 0:
-                body.append(Comp.Plain("\n\n────────\n\n"))
-            body.extend(comps)
-        return [*header, *body]
-
-
-# -----------------------------
-# 模块级工具
-# -----------------------------
-def _build_card_image_sections(card: dict) -> list[list]:
-    """根据卡牌 assetbundleName / 稀有度，构造卡图 section 列表。
-
-    每张图独占一个 section（合并转发节点）：与 File 同样，多张 Image 放在
-    同一节点会被部分 OneBot 协议端折叠，单图独占节点最稳。
-    """
-    ab = (card.get("assetbundleName") or "").strip()
-    if not ab:
-        return []
-    base = f"{STORAGE_BASE}/character/member/{ab}"
-    sections: list[list] = [
-        [
-            Comp.Plain("🖼️ 卡面（特训前）"),
-            Comp.Image.fromURL(f"{base}/card_normal.webp"),
-        ]
-    ]
-    if card.get("cardRarityType") in _RARITIES_WITH_AFTER_TRAINING:
-        sections.append(
-            [
-                Comp.Plain("🖼️ 卡面（特训后）"),
-                Comp.Image.fromURL(f"{base}/card_after_training.webp"),
-            ]
-        )
-    return sections
-
-
-def _find_by_id(items: Iterable[dict], target_id) -> dict | None:
-    if target_id is None:
-        return None
-    return next((item for item in items if item.get("id") == target_id), None)
-
-
-def _character_display_name(character: dict | None) -> str:
-    if not character:
-        return "?"
-    parts = [character.get("firstName", ""), character.get("givenName", "")]
-    return " ".join(p for p in parts if p) or "?"
-
-
-def _fmt_event_time(ts_ms: int | None) -> str:
-    if not ts_ms:
-        return "未知"
-    try:
-        dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).astimezone(_JST)
-        return dt.strftime("%Y-%m-%d %H:%M")
-    except (ValueError, OSError):
-        return "未知"
-
-
-def _format_event_summary(
-    ev: dict, ev_cards: list[dict], characters: list[dict]
-) -> str:
-    lines = [
-        f"🎉 活动 #{ev.get('id')}　{ev.get('name') or '-'}",
-        f"类型：{ev.get('eventType') or '-'}",
-        f"开始：{_fmt_event_time(ev.get('startAt'))} (JST)",
-        f"结束：{_fmt_event_time(ev.get('closedAt'))} (JST)",
-    ]
-    if not ev_cards:
-        lines.append("\n（该活动暂无活动卡牌数据）")
-        return "\n".join(lines)
-
-    lines.append(f"\n活动卡牌（{len(ev_cards)} 张）：")
-    for c in sorted(ev_cards, key=lambda x: x.get("id", 0)):
-        char = _find_by_id(characters, c.get("characterId"))
-        name = _character_display_name(char)
-        lines.append(
-            f"  • [{c.get('id')}] {name}　{c.get('prefix') or '-'}"
-        )
-    lines.append(
-        "\n使用 `/skcd event <活动ID> <角色昵称>` 可进一步拉取该角色的卡面与剧情。"
-    )
-    return "\n".join(lines)
-
-
-def _split_by_lines(text: str, max_chars: int) -> Iterable[str]:
-    """按行把文本切成若干 ≤ max_chars 的块。"""
-    current: list[str] = []
-    current_len = 0
-    for line in text.splitlines():
-        line_len = len(line) + 1  # +1 为换行符
-        if current and current_len + line_len > max_chars:
-            yield "\n".join(current)
-            current = []
-            current_len = 0
-        current.append(line)
-        current_len += line_len
-    if current:
-        yield "\n".join(current)
-
-
-def _sanitize(name: str) -> str:
-    cleaned = _FILENAME_SAFE_RE.sub("_", name).strip("_")
-    return cleaned or "untitled"
-
-
-def _make_filename(
-    card_id: int, scenario_id: str, title: str, lang: str
-) -> str:
-    title_safe = _sanitize(title)[:40]
-    return f"card_{card_id}_{scenario_id}_{title_safe}_{lang}.txt"
-
-
-def _make_asset_filename(card_id: int, scenario_id: str, title: str) -> str:
-    title_safe = _sanitize(title)[:40]
-    return f"card_{card_id}_{scenario_id}_{title_safe}.asset"

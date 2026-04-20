@@ -46,7 +46,7 @@
 
 ```
 astrbot_plugin_sekai_card/
-├── main.py                 # 插件入口：SekaiCardPlugin，注册 /card /event /sekai_card 指令
+├── main.py                 # 插件入口：SekaiCardPlugin，注册 /skcd 指令组与业务编排
 ├── metadata.yaml           # 插件元数据，AstrBot 识别插件的依据
 ├── _conf_schema.json       # WebUI 配置项 Schema
 ├── requirements.txt        # httpx
@@ -54,9 +54,14 @@ astrbot_plugin_sekai_card/
 ├── AGENTS.md               # 本文件，面向开发者/Agent
 └── sekai/
     ├── __init__.py
-    ├── characters.py        # 昵称 -> characterId 映射表，纯函数
-    ├── client.py            # SekaiClient：异步 + 内存 TTL 缓存的数据源客户端
-    └── formatter.py        # format_card_info / format_scenario：纯函数，无副作用
+    ├── characters.py       # 昵称 -> characterId 映射表，纯函数
+    ├── client.py           # SekaiClient：异步 + 内存 TTL 缓存的数据源客户端
+    ├── formatter.py        # format_card_info / format_scenario：纯函数，无副作用
+    ├── constants.py        # 常量 / Prompt / HELP_TEXT / 合并转发平台白名单等纯声明
+    ├── storage.py          # 落盘工具：write_txt / write_asset / sanitize / make_*_filename
+    ├── messaging.py        # build_forward_or_chain / build_card_image_sections，纯函数
+    ├── events.py           # 活动概览格式化与 find_by_id / character_display_name 等工具
+    └── translator.py       # Translator：封装 provider 选择、单次翻译、长文分块翻译
 ```
 
 ### 模块职责
@@ -72,12 +77,28 @@ astrbot_plugin_sekai_card/
   - 剧情渲染的魔法数字（`_ACTION_TALK=1`、`_ACTION_SPECIAL_EFFECT=6`、`_EFFECT_SCENE_TITLE=8`）已命名；新增分支请同样常量化。
 
 - **`main.py`**
-  - `SekaiCardPlugin.cmd_sekai_card`：指令主入口，只做参数校验 + 主数据拉取 + 路由。第二个参数 `translate: bool = False` 由 AstrBot 指令解析器自动把 `true/yes/1` / `false/no/0` 转为 bool。
-  - `_handle_card_with_prefetched`：卡面处理核心。每篇剧情在拿到 `(scenario_dict, raw_bytes)` 后，分别调 `_write_txt`（渲染后的 `_ja.txt`）与 `_write_asset`（原始 `.asset` 字节）落盘，把两条路径一起放进 `episode_sections[i]`。**每个 File 必须独占一个 section（= 一个合并转发 Node）**：OneBot 协议端（NapCat/Lagrange 等）在一个转发 Node 的 content 里遇到 file 段后，会把该 Node 当成"文件节点"，同 Node 内的其他 Plain 与后续 File 都会被吞掉。因此每篇剧情会展开成 2 个 section：`[Plain, File(txt)]` 和 `[Plain, File(asset)]`，汇同「卡面信息」一起通过 `_build_forward_or_chain` 打包成 `Nodes` 合并转发（或 fallback 为单条拼接链）后 `yield event.chain_result(...)` 发出。
-  - `_emit_message` / `_build_forward_or_chain`：消息打包器。判定 `event.get_platform_name() in _SUPPORTS_FORWARD_PLATFORMS`（当前是 `{aiocqhttp, satori}`）来决定是否用合并转发；新平台原生支持 Node/Nodes 时记得把平台名加到集合里。
+  - `SekaiCardPlugin.skcd` 指令组（别名 `sekai_card`）下挂 `cmd_help` / `cmd_card` / `cmd_event` 三个子指令，只做参数校验 + 主数据拉取 + 路由。`translate: bool = False` 由 AstrBot 指令解析器自动把 `true/yes/1` / `false/no/0` 转为 bool。
+  - `_handle_card_with_prefetched`：卡面处理核心。每篇剧情在拿到 `(scenario_dict, raw_bytes)` 后，分别调 `storage.write_txt`（渲染后的 `_ja.txt`）与 `storage.write_asset`（原始 `.asset` 字节）落盘，把两条路径一起放进 `episode_sections[i]`。**每个 File 必须独占一个 section（= 一个合并转发 Node）**：OneBot 协议端（NapCat/Lagrange 等）在一个转发 Node 的 content 里遇到 file 段后，会把该 Node 当成"文件节点"，同 Node 内的其他 Plain 与后续 File 都会被吞掉。因此每篇剧情会展开成 2 个 section：`[Plain, File(txt)]` 和 `[Plain, File(asset)]`，汇同「卡面信息」一起通过 `messaging.build_forward_or_chain` 打包成 `Nodes` 合并转发（或 fallback 为单条拼接链）后 `yield event.chain_result(...)` 发出。
   - `_send_translation_async`：`translate=True` 时开的后台 task，把翻译好的卡名 + 各篇中文剧情再打包成一条合并转发通过 `self.context.send_message(umo, MessageChain(...))` 主动推送。task 由 `self._bg_tasks` 持有，`terminate()` 时统一取消。
-  - `_llm_translate(event, text, system_prompt)`：所有 LLM 调用的唯一入口。新增翻译场景请新增一条 `_SYS_PROMPT_*` 常量并复用本方法，不要直接调 `prov.text_chat`。
-  - `_split_by_lines`、`_find_by_id`、`_sanitize`、`_make_filename`、`_make_asset_filename`：模块级纯工具，不依赖 `self`。
+
+- **`sekai/translator.py`**
+  - `Translator(context, config)`：所有 LLM 调用的唯一入口。`translate_card_title` / `translate_scenario` 是公开方法；`safe_call(coro, label)` 帮调用方吞异常并降级返回 `None`。新增翻译场景请新增一条 `SYS_PROMPT_*` 常量（写到 `sekai/constants.py`）并在这里加一个 `translate_*` 方法，**不要**绕过 `Translator` 直接调 `prov.text_chat`。
+  - `split_by_lines(text, max_chars)`：长剧情按行分块，模块级纯函数。
+
+- **`sekai/messaging.py`**
+  - `build_forward_or_chain(sections, platform_name, header_note=None)`：判定 `platform_name in SUPPORTS_FORWARD_PLATFORMS`（当前是 `{aiocqhttp, satori}`）决定是否用合并转发；新平台原生支持 Node/Nodes 时把平台名加到 `sekai/constants.py` 的 `SUPPORTS_FORWARD_PLATFORMS` 即可。
+  - `build_card_image_sections(card)`：根据 `assetbundleName` 与稀有度构造卡图 section，每张图独占一个 section。
+
+- **`sekai/storage.py`**
+  - `write_txt(data_dir, ...)` / `write_asset(data_dir, ...)`：把渲染后的剧情或原始 `.asset` 字节落盘，返回 `Path`。`data_dir` 由 `SekaiCardPlugin` 持有的 `StarTools.get_data_dir(...)` 注入，模块自身不持状态。
+  - `sanitize` / `make_txt_filename` / `make_asset_filename`：文件名 sanitize 工具，新增需要写盘的资源时复用。
+
+- **`sekai/events.py`**
+  - `format_event_summary(ev, ev_cards, characters)`：活动概览的纯函数渲染。
+  - `find_by_id(items, target_id)` / `character_display_name(character)`：跨模块通用的 ID 查找与角色名拼接工具。
+
+- **`sekai/constants.py`**
+  - 纯声明文件（无 import 副作用）：`HELP_TEXT`、`SYS_PROMPT_*`、`SUPPORTS_FORWARD_PLATFORMS`、`RARITIES_WITH_AFTER_TRAINING`、翻译分块阈值等。改文案 / 加平台 / 加 prompt 都改这里。
 
 ## AstrBot 关键 API（本插件用到的）
 
