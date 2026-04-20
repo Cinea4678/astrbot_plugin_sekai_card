@@ -2,7 +2,7 @@
 
 直接从 sekai-world 公共仓库与 sekai.best 的 CDN 拉取数据，绕开前端页面。
 
-数据源：
+原始数据源：
 - 卡牌主表:     https://sekai-world.github.io/sekai-master-db-diff/cards.json
 - 卡牌剧情表:   https://sekai-world.github.io/sekai-master-db-diff/cardEpisodes.json
 - 角色表:       https://sekai-world.github.io/sekai-master-db-diff/gameCharacters.json
@@ -10,6 +10,10 @@
 - 活动卡牌关系: https://sekai-world.github.io/sekai-master-db-diff/eventCards.json
 - 剧情脚本:     https://storage.sekai.best/sekai-jp-assets/character/member/
                     {assetbundleName}/{scenarioId}.asset
+
+为提升在中国大陆的访问稳定性，实际请求走下面由本仓库维护者提供的镜像
+域名（见 ``MASTER_DB_BASE`` / ``STORAGE_BASE``），路径结构与上游完全一致，
+可直接替换 host 使用。如需切回官方源，把这两个常量改回上面的 URL 即可。
 """
 
 from __future__ import annotations
@@ -20,8 +24,13 @@ from typing import Any
 
 import httpx
 
-MASTER_DB_BASE = "https://sekai-world.github.io/sekai-master-db-diff"
-STORAGE_BASE = "https://storage.sekai.best/sekai-jp-assets"
+# 使用本仓库维护者提供的镜像（cinea.ln.cn），而非官方的
+# sekai-world.github.io / storage.sekai.best。镜像只是改了 host，
+# 路径 / 文件内容与官方源保持一致；切回官方源时把下面两行换成：
+#     MASTER_DB_BASE = "https://sekai-world.github.io/sekai-master-db-diff"
+#     STORAGE_BASE   = "https://storage.sekai.best/sekai-jp-assets"
+MASTER_DB_BASE = "https://master-db.sekai.cinea.ln.cn/sekai-master-db-diff"
+STORAGE_BASE = "https://storage.sekai.cinea.ln.cn/sekai-jp-assets"
 
 CARDS_URL = f"{MASTER_DB_BASE}/cards.json"
 CARD_EPISODES_URL = f"{MASTER_DB_BASE}/cardEpisodes.json"
