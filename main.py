@@ -99,7 +99,7 @@ _HELP_TEXT = (
     "astrbot_plugin_sekai_card",
     "Cinea4678",
     "从 sekai.best 拉取 Project Sekai 卡牌 / 活动信息与角色剧情并输出文本。",
-    "0.4.1",
+    "0.4.2",
     "https://github.com/Cinea4678/astrbot_plugin_sekai_card",
 )
 class SekaiCardPlugin(Star):
@@ -324,17 +324,26 @@ class SekaiCardPlugin(Star):
             )
 
         # 原文合并发送（或 fallback）
-        episode_comps = [
-            [
-                Comp.Plain(f"剧情「{sec['title']}」已导出："),
-                Comp.File(file=str(sec["path"]), name=sec["path"].name),
-                Comp.File(
-                    file=str(sec["asset_path"]),
-                    name=sec["asset_path"].name,
-                ),
-            ]
-            for sec in episode_sections
-        ]
+        # 注意：OneBot 协议端（NapCat/Lagrange 等）在合并转发节点里，
+        # content 出现 file 段后会把整个 Node 视为"文件节点"，吞掉同 Node
+        # 内的其他 Plain 和后续 File。所以每个 File 必须独占一个 section。
+        episode_comps: list[list] = []
+        for sec in episode_sections:
+            episode_comps.append(
+                [
+                    Comp.Plain(f"剧情「{sec['title']}」已导出（纯文本）："),
+                    Comp.File(file=str(sec["path"]), name=sec["path"].name),
+                ]
+            )
+            episode_comps.append(
+                [
+                    Comp.Plain(f"剧情「{sec['title']}」原始 .asset："),
+                    Comp.File(
+                        file=str(sec["asset_path"]),
+                        name=sec["asset_path"].name,
+                    ),
+                ]
+            )
         chain = self._build_forward_or_chain(
             sections=[card_info_comps, *episode_comps],
             platform_name=event.get_platform_name(),

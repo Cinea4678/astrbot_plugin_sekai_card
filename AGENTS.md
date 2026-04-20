@@ -73,7 +73,7 @@ astrbot_plugin_sekai_card/
 
 - **`main.py`**
   - `SekaiCardPlugin.cmd_sekai_card`：指令主入口，只做参数校验 + 主数据拉取 + 路由。第二个参数 `translate: bool = False` 由 AstrBot 指令解析器自动把 `true/yes/1` / `false/no/0` 转为 bool。
-  - `_handle_card_with_prefetched`：卡面处理核心。每篇剧情在拿到 `(scenario_dict, raw_bytes)` 后，分别调 `_write_txt`（渲染后的 `_ja.txt`）与 `_write_asset`（原始 `.asset` 字节）落盘，把两条路径一起放进 `episode_sections[i]`。最终每篇剧情的 section 包含 `Plain + File(txt) + File(asset)` 三个组件，汇同「卡面信息」一起通过 `_emit_message` 发出（支持合并转发的平台合并为一条 `Nodes`，否则 fallback 为单条拼接链）。
+  - `_handle_card_with_prefetched`：卡面处理核心。每篇剧情在拿到 `(scenario_dict, raw_bytes)` 后，分别调 `_write_txt`（渲染后的 `_ja.txt`）与 `_write_asset`（原始 `.asset` 字节）落盘，把两条路径一起放进 `episode_sections[i]`。**每个 File 必须独占一个 section（= 一个合并转发 Node）**：OneBot 协议端（NapCat/Lagrange 等）在一个转发 Node 的 content 里遇到 file 段后，会把该 Node 当成"文件节点"，同 Node 内的其他 Plain 与后续 File 都会被吞掉。因此每篇剧情会展开成 2 个 section：`[Plain, File(txt)]` 和 `[Plain, File(asset)]`，汇同「卡面信息」一起通过 `_build_forward_or_chain` 打包成 `Nodes` 合并转发（或 fallback 为单条拼接链）后 `yield event.chain_result(...)` 发出。
   - `_emit_message` / `_build_forward_or_chain`：消息打包器。判定 `event.get_platform_name() in _SUPPORTS_FORWARD_PLATFORMS`（当前是 `{aiocqhttp, satori}`）来决定是否用合并转发；新平台原生支持 Node/Nodes 时记得把平台名加到集合里。
   - `_send_translation_async`：`translate=True` 时开的后台 task，把翻译好的卡名 + 各篇中文剧情再打包成一条合并转发通过 `self.context.send_message(umo, MessageChain(...))` 主动推送。task 由 `self._bg_tasks` 持有，`terminate()` 时统一取消。
   - `_llm_translate(event, text, system_prompt)`：所有 LLM 调用的唯一入口。新增翻译场景请新增一条 `_SYS_PROMPT_*` 常量并复用本方法，不要直接调 `prov.text_chat`。
