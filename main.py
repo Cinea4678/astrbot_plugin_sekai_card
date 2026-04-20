@@ -31,8 +31,12 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
 from .sekai.characters import resolve_character_id
-from .sekai.client import SekaiClient
+from .sekai.client import STORAGE_BASE, SekaiClient
 from .sekai.formatter import format_card_info, format_scenario
+
+# 卡图：sekai.best CDN 上的大图（特训前 / 特训后）。
+# 仅 rarity_3 / rarity_4 同时存在特训后图，其它稀有度只发特训前。
+_RARITIES_WITH_AFTER_TRAINING = frozenset({"rarity_3", "rarity_4"})
 
 # 翻译相关常量
 _TRANSLATE_CHUNK_MAX_CHARS = 2000
@@ -99,7 +103,7 @@ _HELP_TEXT = (
     "astrbot_plugin_sekai_card",
     "Cinea4678",
     "从 sekai.best 拉取 Project Sekai 卡牌 / 活动信息与角色剧情并输出文本。",
-    "0.4.2",
+    "0.5.0",
     "https://github.com/Cinea4678/astrbot_plugin_sekai_card",
 )
 class SekaiCardPlugin(Star):
@@ -286,8 +290,14 @@ class SekaiCardPlugin(Star):
             key=lambda ep: ep.get("seq", 0),
         )
 
+        image_sections = _build_card_image_sections(card)
+
         if not card_episodes:
-            yield event.chain_result(card_info_comps)
+            chain = self._build_forward_or_chain(
+                sections=[card_info_comps, *image_sections],
+                platform_name=event.get_platform_name(),
+            )
+            yield event.chain_result(chain)
             yield event.plain_result("该卡牌没有找到对应的角色剧情条目。")
             return
 
@@ -345,7 +355,7 @@ class SekaiCardPlugin(Star):
                 ]
             )
         chain = self._build_forward_or_chain(
-            sections=[card_info_comps, *episode_comps],
+            sections=[card_info_comps, *episode_comps, *image_sections],
             platform_name=event.get_platform_name(),
         )
         yield event.chain_result(chain)
@@ -555,6 +565,32 @@ class SekaiCardPlugin(Star):
 # -----------------------------
 # 模块级工具
 # -----------------------------
+def _build_card_image_sections(card: dict) -> list[list]:
+    """根据卡牌 assetbundleName / 稀有度，构造卡图 section 列表。
+
+    每张图独占一个 section（合并转发节点）：与 File 同样，多张 Image 放在
+    同一节点会被部分 OneBot 协议端折叠，单图独占节点最稳。
+    """
+    ab = (card.get("assetbundleName") or "").strip()
+    if not ab:
+        return []
+    base = f"{STORAGE_BASE}/character/member/{ab}"
+    sections: list[list] = [
+        [
+            Comp.Plain("🖼️ 卡面（特训前）"),
+            Comp.Image.fromURL(f"{base}/card_normal.webp"),
+        ]
+    ]
+    if card.get("cardRarityType") in _RARITIES_WITH_AFTER_TRAINING:
+        sections.append(
+            [
+                Comp.Plain("🖼️ 卡面（特训后）"),
+                Comp.Image.fromURL(f"{base}/card_after_training.webp"),
+            ]
+        )
+    return sections
+
+
 def _find_by_id(items: Iterable[dict], target_id) -> dict | None:
     if target_id is None:
         return None
