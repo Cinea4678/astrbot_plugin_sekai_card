@@ -26,6 +26,7 @@ import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, StarTools, register
+from astrbot.core import astrbot_config
 
 from .sekai.characters import resolve_character_id
 from .sekai.client import SekaiClient
@@ -45,7 +46,7 @@ from .sekai.translator import Translator
     "astrbot_plugin_sekai_card",
     "Cinea4678",
     "从 sekai.best 拉取 Project Sekai 卡牌 / 活动信息与角色剧情并输出文本。",
-    "0.6.0",
+    "0.6.1",
     "https://github.com/Cinea4678/astrbot_plugin_sekai_card",
 )
 class SekaiCardPlugin(Star):
@@ -171,6 +172,26 @@ class SekaiCardPlugin(Star):
         if self._bg_tasks:
             await asyncio.gather(*self._bg_tasks, return_exceptions=True)
 
+    async def _make_file_component(self, path: Path):
+        """按 AstrBot 全局 callback_api_base 决定用 HTTP 回调链接或 file:// URI。"""
+        callback_api_base = str(
+            astrbot_config.get("callback_api_base", "") or ""
+        ).strip()
+        if callback_api_base:
+            local_file = Comp.File(file=str(path), name=path.name)
+            try:
+                url = await local_file.register_to_file_service()
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "[sekai_card] 注册文件到 AstrBot callback 文件服务失败，退回 file://：%s",
+                    path,
+                    exc_info=True,
+                )
+            else:
+                return Comp.File(name=path.name, url=url)
+
+        return Comp.File(name=path.name, url=path.resolve().as_uri())
+
     # -----------------------------
     # 单张卡牌处理
     # -----------------------------
@@ -273,19 +294,18 @@ class SekaiCardPlugin(Star):
         # 内的其他 Plain 和后续 File。所以每个 File 必须独占一个 section。
         episode_comps: list[list] = []
         for sec in episode_sections:
+            txt_file = await self._make_file_component(sec["path"])
+            asset_file = await self._make_file_component(sec["asset_path"])
             episode_comps.append(
                 [
                     Comp.Plain(f"剧情「{sec['title']}」已导出（纯文本）："),
-                    Comp.File(file=str(sec["path"]), name=sec["path"].name),
+                    txt_file,
                 ]
             )
             episode_comps.append(
                 [
                     Comp.Plain(f"剧情「{sec['title']}」原始 .asset："),
-                    Comp.File(
-                        file=str(sec["asset_path"]),
-                        name=sec["asset_path"].name,
-                    ),
+                    asset_file,
                 ]
             )
         chain = build_forward_or_chain(
@@ -350,10 +370,11 @@ class SekaiCardPlugin(Star):
                 path_zh = write_txt(
                     self._data_dir, card_id, sec["scenario_id"], title, "zh", text_zh
                 )
+                zh_file = await self._make_file_component(path_zh)
                 sections.append(
                     [
                         Comp.Plain(f"剧情「{title}」中文译本："),
-                        Comp.File(file=str(path_zh), name=path_zh.name),
+                        zh_file,
                     ]
                 )
 

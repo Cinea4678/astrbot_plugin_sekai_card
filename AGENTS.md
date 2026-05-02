@@ -203,3 +203,7 @@ https://storage.sekai.best/sekai-jp-assets/thumbnail/chara/{assetbundleName}_aft
 - 剧情脚本中的选项分支（choice）目前按主时间线顺序输出，没有处理玩家选项切换。
 - LLM 翻译基于 prompt 约束，无法 100% 保证 "保留行数 / 保留 `\N` / 保留空行" 的硬性要求；能力弱的模型可能产出格式漂移的译文。
 - `gameCharacters.json` 中只有主 10 + 5 位 VS 成员；客串 / 活动 mob 角色不在内，当 `characterId` 不在主角色表时，插件会降级显示 "角色ID xxx"。
+
+## 参考资料
+
+- 请访问 `../AstrBot` 访问 AstrBot 框架的源码。
