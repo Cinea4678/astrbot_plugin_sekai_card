@@ -46,7 +46,7 @@ from .sekai.translator import Translator
     "astrbot_plugin_sekai_card",
     "Cinea4678",
     "从 sekai.best 拉取 Project Sekai 卡牌 / 活动信息与角色剧情并输出文本。",
-    "0.6.1",
+    "0.6.2",
     "https://github.com/Cinea4678/astrbot_plugin_sekai_card",
 )
 class SekaiCardPlugin(Star):
