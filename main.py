@@ -26,7 +26,7 @@ import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, StarTools, register
-from astrbot.core import astrbot_config
+from astrbot.core import file_token_service
 
 from .sekai.characters import resolve_character_id
 from .sekai.client import SekaiClient
@@ -172,20 +172,23 @@ class SekaiCardPlugin(Star):
         if self._bg_tasks:
             await asyncio.gather(*self._bg_tasks, return_exceptions=True)
 
-    async def _make_file_component(self, path: Path):
-        """按 AstrBot 全局 callback_api_base 决定用 HTTP 回调链接或 file:// URI。"""
+    async def _make_file_component(self, path: Path, umo: str | None = None):
+        """按 AstrBot 当前会话配置决定用 HTTP 回调链接或 file:// URI。"""
+        astrbot_conf = self.context.get_config(umo)
         callback_api_base = str(
-            astrbot_config.get("callback_api_base", "") or ""
+            astrbot_conf.get("callback_api_base", "") or ""
         ).strip()
+        callback_api_base = callback_api_base.removesuffix("/")
+        config_path = getattr(astrbot_conf, "config_path", "")
         logger.info(
-            "[sekai_card] 构造文件链接: callback_api_base=%r, path=%s",
+            "[sekai_card] 构造文件链接: callback_api_base=%r, config_path=%s, path=%s",
             callback_api_base,
+            config_path,
             path,
         )
         if callback_api_base:
-            local_file = Comp.File(file=str(path), name=path.name)
             try:
-                url = await local_file.register_to_file_service()
+                token = await file_token_service.register_file(str(path))
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "[sekai_card] 注册文件到 AstrBot callback 文件服务失败，退回 file://：%s",
@@ -193,6 +196,7 @@ class SekaiCardPlugin(Star):
                     exc_info=True,
                 )
             else:
+                url = f"{callback_api_base}/api/file/{token}"
                 logger.info(
                     "[sekai_card] 文件链接生成成功: callback_api_base=%r, link=%s",
                     callback_api_base,
@@ -310,8 +314,12 @@ class SekaiCardPlugin(Star):
         # 内的其他 Plain 和后续 File。所以每个 File 必须独占一个 section。
         episode_comps: list[list] = []
         for sec in episode_sections:
-            txt_file = await self._make_file_component(sec["path"])
-            asset_file = await self._make_file_component(sec["asset_path"])
+            txt_file = await self._make_file_component(
+                sec["path"], event.unified_msg_origin
+            )
+            asset_file = await self._make_file_component(
+                sec["asset_path"], event.unified_msg_origin
+            )
             episode_comps.append(
                 [
                     Comp.Plain(f"剧情「{sec['title']}」已导出（纯文本）："),
@@ -386,7 +394,9 @@ class SekaiCardPlugin(Star):
                 path_zh = write_txt(
                     self._data_dir, card_id, sec["scenario_id"], title, "zh", text_zh
                 )
-                zh_file = await self._make_file_component(path_zh)
+                zh_file = await self._make_file_component(
+                    path_zh, unified_msg_origin
+                )
                 sections.append(
                     [
                         Comp.Plain(f"剧情「{title}」中文译本："),
