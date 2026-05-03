@@ -177,6 +177,11 @@ class SekaiCardPlugin(Star):
         callback_api_base = str(
             astrbot_config.get("callback_api_base", "") or ""
         ).strip()
+        logger.info(
+            "[sekai_card] 构造文件链接: callback_api_base=%r, path=%s",
+            callback_api_base,
+            path,
+        )
         if callback_api_base:
             local_file = Comp.File(file=str(path), name=path.name)
             try:
@@ -188,9 +193,20 @@ class SekaiCardPlugin(Star):
                     exc_info=True,
                 )
             else:
+                logger.info(
+                    "[sekai_card] 文件链接生成成功: callback_api_base=%r, link=%s",
+                    callback_api_base,
+                    url,
+                )
                 return Comp.File(name=path.name, url=url)
 
-        return Comp.File(name=path.name, url=path.resolve().as_uri())
+        file_uri = path.resolve().as_uri()
+        logger.info(
+            "[sekai_card] 文件链接使用 file:// 回退: callback_api_base=%r, link=%s",
+            callback_api_base,
+            file_uri,
+        )
+        return Comp.File(name=path.name, url=file_uri)
 
     # -----------------------------
     # 单张卡牌处理
